@@ -1,23 +1,26 @@
 # REMERGE - Multi-Word Expression discovery algorithm
 
-This is a Multi-Word Expression discovery algorithm, which started as a re-implementation and simplification of a multi-word expression (MWE) discovery algorithm called MERGE, detailed in a publication and PhD thesis[^2][^3]. The benefit of this algorithm is that it's non-parametric in regards to the size of the n-grams: you do not need to specifiy a priori how many n-grams comprise a MWE. 
+This is a Multi-Word Expression discovery algorithm, which started as a re-implementation and simplification of a multi-word expression (MWE) discovery algorithm called MERGE, detailed in a publication and PhD thesis[^2][^3]. The primary benefit of this algorithm is that it's non-parametric in regards to the size of the n-grams that constitute a MWE—you do not need to specifiy a priori how many n-grams comprise a MWE—you only need to specify the number of iterations you want the algorithm to run.
 
-The code was originally derived from an existing implementation from the original author[^1], then was reviewed and some corrections applied and converted from python 2 to 3. The changes include:
- - a correction of the log-likelihood calculation; previously it was not using the correct values 
- - type annotations
- - the removal of gapsize / discontinuous bigrams (see below for issues)
- - an overall reduction in codebase size and complexity
-   - ~60% less loc
-   - removed `pandas` and `nltk` dependencies
- - the inclusion of additional metrics (Frequency, [NPMI](https://svn.spraakdata.gu.se/repos/gerlof/pub/www/Docs/npmi-pfd.pdf))[^4] for selecting the winning bigram.
+The code was originally derived from an existing implementation from the original author[^1] that I reviewed, and converted from python 2 to 3, and modified and updated with the following:
+- a correction of the log-likelihood calculation; previously it was not using the correct values for the contingency table
+- the removal of gapsize / discontinuous bigrams (see below for issues with the prior implementation)
+- an overall reduction in codebase size and complexity
+  - ~60% reduction in loc
+  - removed `pandas` and `nltk` dependencies
+- type annotations
+- the inclusion of additional metrics (Frequency, [NPMI](https://svn.spraakdata.gu.se/repos/gerlof/pub/www/Docs/npmi-pfd.pdf)[^4]) for selecting the winning bigram.
+- corrections for merging sequetial bigrams greedily and completely.
+  - e.g. `'ya ya ya ya'` -> `'(ya ya) (ya ya)'` -> `'(ya ya ya ya)'`. Previously the merge order was non-deterministic, and you could end up with `'ya (ya ya) ya'`
+- An overall simplification of the algorithm. 
+  - As a tradeoff, this version may be less efficient. After a bigram is merged into a single lexeme in the original implementation, new bigrams and conflicting (old) bigrams were respectively added and subtracted from a mutable counter of bigrams. The counts of this object were difficult to track and validate, and resulted in errors in certain cases, so I removed this step. Instead, only the lexeme data is updated with the new merged lexemes, and bigram data is recreated from scratch using the lexeme data. There is certainly improvement for optimization here, particularly in the case where we are recalculating bigrams from lines that did not contain a merged lexeme and thus their bigram data did not change.
 
 #### Usage
 
 ```python
-from typing import List
 import remerge
 
-corpus: List[List[str]] = [
+corpus = [
     ["a", "list", "of", "already", "tokenized", "texts"],
     ["where", "each", "item", "is", "a", "list", "of", "tokens"],
     ["isn't", "a", "list", "nice"]
@@ -30,7 +33,7 @@ winners = remerge.run(corpus, iterations=1, method=remerge.SelectionMethod.frequ
 
 There are 3 bigram winner selection methods: [Log-Likelihood (G²)](https://aclanthology.org/J93-1003.pdf)[^5], [NPMI](https://svn.spraakdata.gu.se/repos/gerlof/pub/www/Docs/npmi-pfd.pdf)[^4], and raw frequency. They are available under the `SelectionMethod` enum. The default is log-likelihood, which was used in the original implementation.
 
-If using `NPMI`, you likely want to include the `min_count` parameter, "as infrequent word pairs tend to dominate the top of bigramme lists that are ranked after PMI". (p. 4[^4])
+If using `NPMI` (`SelectionMethod.npmi`), you likely want to provide a `min_count` parameter, "as infrequent word pairs tend to dominate the top of bigramme lists that are ranked after PMI". (p. 4[^4])
 
 ```python
 winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_count=25)
@@ -48,16 +51,18 @@ pip install git+https://github.com/pmbaumgartner/remerge.git
 
 #### Issues with Original Algorithm
 
-**Single Bigrams with discontinuities forming from distinct Lexeme positions**
+##### Single Bigrams with discontinuities forming from distinct Lexeme positions
 
 One issue with discontinuities / gaps in the original algorithm is that it did not distinguish the position of a satellite lexeme occuring to the left or right of a bigram with a gap.
 
-Take for example these two fictitous sentences, using `-` to represent an arbitrary token:
+Take for example these two example sentences, using `-` to represent an arbitrary token:
 
-`a b c -`
-`a - c b`
+```
+a b c -
+a - c b
+```
 
-Assume in a prior iteration, a winning bigram was `(a, _, c)`, representing the token `a`, a gap of `1`, and then the token `c`. with a gapsize of 1. The past algorithm would count the token `b` twice when attemping to find new bigrams, despite there being two distinct bigrams represented here: `(a, b, c)` and `(a, _, c, b)`. Then, after double counting, it would merge these into the bigram `(a, b, c)` regardless.
+Assume in a prior iteration, a winning bigram was `(a, _, c)`, representing the token `a`, a gap of `1`, and then the token `c`. with a gapsize of 1. The past algorithm would count the token `b` twice towards the same n-gram `(a, b, c)`, despite there being two distinct n-grams represented here: `(a, b, c)` and `(a, _, c, b)`.
 
 I think the algorithm is counting on the fact that it would be very rare to encounter this sequence of lexemes in a realistic corpus, where the same word would appear within the gap **and** after the gap. I think this is more of an artifact of this specific example with an unrealistically small vocabulary.
 
