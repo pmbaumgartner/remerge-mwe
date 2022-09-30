@@ -60,7 +60,7 @@ The algorithm operates iteratively in two stages: first, it collects all bigrams
 
 At initialization, a `lexeme` consists of only a single token, but as the algorithm iterates lexemes become multi-word expressions formed from the winning bigrams. `Lexemes` contain two parts: a `word` which is a tuple of strings, and an `index` which represents the position of that specific token in a MWE. For example, if the winning bigram is `(you, know)`, occurrences of that sequence of lexemes will be replaced with `[(you, know), 0]` and `[(you, know), 1]` in the corpus. When bigrams are counted, only a root lexeme (where the index is 0) can form a bigram, so merged tokens don't get double counted. For a more visual explanation of a few iterations assuming specific winners, see the image below.
 
-<img src="explanation.png" alt="An explanation of the remerge algorithm" width="350">
+<img src="explanation.png" alt="An explanation of the remerge algorithm" width="500">
 
 #### Limitations
 
