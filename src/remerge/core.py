@@ -1,12 +1,24 @@
+import json
 from collections import Counter, defaultdict
-from dataclasses import field, dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from functools import cached_property
 from itertools import groupby
 from pathlib import Path
-from typing import Callable, Counter as CounterType, Iterable, Optional, Sized
-from typing import DefaultDict, Dict, List, NamedTuple, NewType, Set, Tuple
-import json
-from enum import Enum
+from typing import Callable, Literal
+from typing import Counter as CounterType
+from typing import (
+    DefaultDict,
+    Dict,
+    Iterable,
+    List,
+    NamedTuple,
+    NewType,
+    Optional,
+    Set,
+    Sized,
+    Tuple,
+)
 
 import numpy as np
 import numpy.typing as npt
@@ -44,16 +56,20 @@ class LexemeData:
     lexemes_to_freqs: Dict[Lexeme, int] = field(default_factory=dict)
 
     @classmethod
-    def from_corpus(cls, corpus: Iterable[Iterable[str]]) -> "LexemeData":
+    def from_corpus(
+        cls, corpus: Iterable[Iterable[str]], progress_bar: bool = False
+    ) -> "LexemeData":
         lexeme_data = cls()
         total: Optional[int] = len(corpus) if isinstance(corpus, Sized) else None
-        corpus_iter_progress = tqdm(
-            enumerate(corpus),
-            desc="Creating LexemeData from Corpus",
-            unit="line",
-            total=total,
-        )
-        for (line_ix, tokens) in corpus_iter_progress:
+        corpus_iter = enumerate(corpus)
+        if progress_bar:
+            corpus_iter = tqdm(
+                corpus_iter,
+                desc="Creating LexemeData from Corpus",
+                unit="line",
+                total=total,
+            )
+        for (line_ix, tokens) in corpus_iter:
             for (word_ix, word) in enumerate(tokens):
                 line_ix = LineIndex(line_ix)
                 word_ix = TokenIndex(word_ix)
@@ -102,15 +118,19 @@ class BigramData:
     right_lex_freqs: Dict[Lexeme, int] = field(default_factory=dict)
 
     @classmethod
-    def from_lexemes(cls, lexeme_data: LexemeData) -> "BigramData":
+    def from_lexemes(
+        cls, lexeme_data: LexemeData, progress_bar: bool = False
+    ) -> "BigramData":
         bigram_data = cls()
-        corpus_iter_progress = tqdm(
-            range(lexeme_data.corpus_length),
-            desc="Creating BigramData from LexemeData",
-            unit="line",
-            total=lexeme_data.corpus_length - 1,
-        )
-        for line_ix in corpus_iter_progress:
+        corpus_iter = range(lexeme_data.corpus_length)
+        if progress_bar:
+            corpus_iter = tqdm(
+                corpus_iter,
+                desc="Creating BigramData from LexemeData",
+                unit="line",
+                total=lexeme_data.corpus_length - 1,
+            )
+        for line_ix in corpus_iter:
             line_lexeme_data = lexeme_data.locations_to_root_lexemes(LineIndex(line_ix))
             line_items = list(line_lexeme_data.items())
             for (left_ix, left), (_, right) in zip(line_items, line_items[1:]):
@@ -327,16 +347,23 @@ def run(
     method: SelectionMethod = SelectionMethod.log_likelihood,
     min_count: int = 0,
     output: Optional[Path] = None,
+    progress_bar: Literal["all", "iterations", "none"] = "none",
 ) -> List[WinnerInfo]:
     """If choosing NPMI as the selection method, prefer using min_count because:
 
     'infrequent word pairs tend to dominate the top of bigramme lists that are ranked after PMI'
     """
     winners: List[WinnerInfo] = []
-    lexemes = LexemeData.from_corpus(corpus)
-    bigrams = BigramData.from_lexemes(lexemes)
+    all_progress = progress_bar == "all"
+    lexemes = LexemeData.from_corpus(corpus, progress_bar=all_progress)
+    bigrams = BigramData.from_lexemes(lexemes, progress_bar=all_progress)
     winner_selection_function = SELECTION_METHODS[method]
-    for _ in trange(iterations):
+    iterations_iter = (
+        trange(iterations)
+        if progress_bar in {"all", "iterations"}
+        else range(iterations)
+    )
+    for _ in iterations_iter:
         winning_bigram = winner_selection_function(bigrams, min_count)
         winner = WinnerInfo.from_bigram_with_data(
             bigram=winning_bigram, bigram_data=bigrams
@@ -347,4 +374,6 @@ def run(
             output.write_text(json.dumps(winner_lexemes))
         lexemes = merge_winner(winner, lexemes)
         bigrams = BigramData.from_lexemes(lexemes)
+        if isinstance(iterations_iter, tqdm):
+            iterations_iter.set_postfix({"last_winner": winner.merged_lexeme.word})
     return winners

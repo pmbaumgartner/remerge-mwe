@@ -26,8 +26,9 @@ corpus = [
     ["isn't", "a", "list", "nice"]
 ]
 
-winners = remerge.run(corpus, iterations=1, method=remerge.SelectionMethod.frequency)
-
+winners = remerge.run(
+    corpus, iterations=1, method=remerge.SelectionMethod.frequency, progress_bar="all"
+)
 # winners[0].merged_lexeme.word == ('a', 'list')
 ```
 
