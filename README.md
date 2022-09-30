@@ -41,6 +41,14 @@ winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_coun
 
 #### Install
 
+Latest release:
+
+```bash
+pip install -U remerge
+```
+
+For latest from github:
+
 ```bash
 pip install git+https://github.com/pmbaumgartner/remerge.git 
 ```
