@@ -53,15 +53,23 @@ For latest from github:
 pip install git+https://github.com/pmbaumgartner/remerge.git 
 ```
 
+#### Overview
+
+The algorithm operates iteratively in two stages: first, it collects all bigrams of co-occurring `lexemes` in the corpus. A measure is calculated on the set of all bigrams to determine a winner. The two lexemes that comprise the winning bigram are merged into a single lexeme. Instances of that bigram in the corpus are replaced with the merged lexeme. All bigrams are collected again on this new corpus and then the process repeats.
+
+At initialization, a `lexeme` consists of only a single token, but as the algorithm iterates lexemes become multi-word expressions formed from the winning bigrams. `Lexemes` contain two parts: a `word` which is a tuple of strings, and an `index` which represents the position of that specific token in a MWE. For example, if the winning bigram is `(you, know)`, occurences of that sequence of lexemes will be replaced with `[(you, know), 0]` and `[(you, know), 1]` in the corpus. When bigrams are counted, only a root lexeme (where the index is 0) can form a bigram, so merged tokens don't get double counted. For a more visual explanation of a few iterations assuming specific winners, see the image below.
+
+<img src="explanation.png" alt="An explanation of the remerge algorithm" width="350">
+
 #### Limitations
 
-**No tie-breaking logic** - I found this while testing and comparing to the original reference. If two bigrams are tied for log-likelihood, there is no tie-breaking mechanism. Both this implementation and the original implementation simply pick the first bigram from the index with the maximum value. However, we have slightly different implementations of how the statistics table is created (i.e., the ordering of the index), which makes direct comparisons between implementations difficult.
+**No tie-breaking logic** - I found this while testing and comparing to the original reference implementation. If two bigrams are tied for the winning metric, there is no tie-breaking mechanism. Both this implementation and the original implementation simply pick the first bigram from the index with the maximum value. We have slightly different implementation of how the bigram satistics table is created (i.e., the ordering of the index), which makes direct comparisons between implementations difficult.
 
 #### Issues with Original Algorithm
 
 ##### Single Bigrams with discontinuities forming from distinct Lexeme positions
 
-One issue with discontinuities / gaps in the original algorithm is that it did not distinguish the position of a satellite lexeme occuring to the left or right of a bigram with a gap.
+One issue with discontinuities or gaps in the original algorithm is that it did not distinguish the position of a satellite lexeme occuring to the left or right of a bigram with a gap.
 
 Take for example these two example sentences, using `-` to represent an arbitrary token:
 
@@ -70,7 +78,7 @@ a b c -
 a - c b
 ```
 
-Assume in a prior iteration, a winning bigram was `(a, _, c)`, representing the token `a`, a gap of `1`, and then the token `c`. with a gapsize of 1. The past algorithm would count the token `b` twice towards the same n-gram `(a, b, c)`, despite there being two distinct n-grams represented here: `(a, b, c)` and `(a, _, c, b)`.
+Assume in a prior iteration, a winning bigram was `(a, _, c)`, representing the token `a`, a gap of `1`, and then the token `c`. with a gapsize of 1. The past algorithm, run on the above corpus, would count the token `b` twice towards the same n-gram `(a, b, c)`, despite there being two distinct n-grams represented here: `(a, b, c)` and `(a, _, c, b)`.
 
 I think the algorithm is counting on the fact that it would be very rare to encounter this sequence of lexemes in a realistic corpus, where the same word would appear within the gap **and** after the gap. I think this is more of an artifact of this specific example with an unrealistically small vocabulary.
 
