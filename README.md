@@ -1,8 +1,8 @@
 # REMERGE - Multi-Word Expression discovery algorithm
 
-This is a Multi-Word Expression discovery algorithm, which started as a re-implementation and simplification of a multi-word expression (MWE) discovery algorithm called MERGE, detailed in a publication and PhD thesis[^2][^3]. The primary benefit of this algorithm is that it's non-parametric in regards to the size of the n-grams that constitute a MWE—you do not need to specify a priori how many n-grams comprise a MWE—you only need to specify the number of iterations you want the algorithm to run.
+REMERGE is a Multi-Word Expression (MWE) discovery algorithm, which started as a re-implementation and simplification of a similar algorithm called MERGE, detailed in a publication and PhD thesis[^2][^3]. The primary benefit of this algorithm is that it's non-parametric in regards to the size of the n-grams that constitute a MWE—you do not need to specify a priori how many n-grams comprise a MWE—you only need to specify the number of iterations you want the algorithm to run.
 
-The code was originally derived from an existing implementation from the original author[^1] that I reviewed, and converted from python 2 to 3, and modified and updated with the following:
+The code was originally derived from an existing implementation from the original author[^1] that I reviewed, converted from python 2 to 3, then modified and updated with the following:
 - a correction of the log-likelihood calculation; previously it was not using the correct values for the contingency table
 - the removal of gapsize / discontinuous bigrams (see below for issues with the prior implementation)
 - an overall reduction in codebase size and complexity
@@ -45,16 +45,16 @@ winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_coun
 Latest release:
 
 ```bash
-pip install -U remerge
+pip install -U remerge-mwe
 ```
 
 For latest from github:
 
 ```bash
-pip install git+https://github.com/pmbaumgartner/remerge.git 
+pip install git+https://github.com/pmbaumgartner/remerge-mwe.git 
 ```
 
-#### Overview
+#### How it works
 
 The algorithm operates iteratively in two stages: first, it collects all bigrams of co-occurring `lexemes` in the corpus. A measure is calculated on the set of all bigrams to determine a winner. The two lexemes that comprise the winning bigram are merged into a single lexeme. Instances of that bigram in the corpus are replaced with the merged lexeme. All bigrams are collected again on this new corpus and then the process repeats.
 
