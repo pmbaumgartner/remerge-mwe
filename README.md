@@ -1,6 +1,6 @@
 # REMERGE - Multi-Word Expression discovery algorithm
 
-This is a Multi-Word Expression discovery algorithm, which started as a re-implementation and simplification of a multi-word expression (MWE) discovery algorithm called MERGE, detailed in a publication and PhD thesis[^2][^3]. The primary benefit of this algorithm is that it's non-parametric in regards to the size of the n-grams that constitute a MWE—you do not need to specifiy a priori how many n-grams comprise a MWE—you only need to specify the number of iterations you want the algorithm to run.
+This is a Multi-Word Expression discovery algorithm, which started as a re-implementation and simplification of a multi-word expression (MWE) discovery algorithm called MERGE, detailed in a publication and PhD thesis[^2][^3]. The primary benefit of this algorithm is that it's non-parametric in regards to the size of the n-grams that constitute a MWE—you do not need to specify a priori how many n-grams comprise a MWE—you only need to specify the number of iterations you want the algorithm to run.
 
 The code was originally derived from an existing implementation from the original author[^1] that I reviewed, and converted from python 2 to 3, and modified and updated with the following:
 - a correction of the log-likelihood calculation; previously it was not using the correct values for the contingency table
@@ -10,7 +10,7 @@ The code was originally derived from an existing implementation from the origina
   - removed `pandas` and `nltk` dependencies
 - type annotations
 - the inclusion of additional metrics (Frequency, [NPMI](https://svn.spraakdata.gu.se/repos/gerlof/pub/www/Docs/npmi-pfd.pdf)[^4]) for selecting the winning bigram.
-- corrections for merging sequetial bigrams greedily and completely.
+- corrections for merging sequential bigrams greedily and completely.
   - e.g. `'ya ya ya ya'` -> `'(ya ya) (ya ya)'` -> `'(ya ya ya ya)'`. Previously the merge order was non-deterministic, and you could end up with `'ya (ya ya) ya'`
 - An overall simplification of the algorithm. 
   - As a tradeoff, this version may be less efficient. After a bigram is merged into a single lexeme in the original implementation, new bigrams and conflicting (old) bigrams were respectively added and subtracted from a mutable counter of bigrams. The counts of this object were difficult to track and validate, and resulted in errors in certain cases, so I removed this step. Instead, only the lexeme data is updated with the new merged lexemes, and bigram data is recreated from scratch using the lexeme data. There is certainly improvement for optimization here, particularly in the case where we are recalculating bigrams from lines that did not contain a merged lexeme and thus their bigram data did not change.
@@ -57,19 +57,19 @@ pip install git+https://github.com/pmbaumgartner/remerge.git
 
 The algorithm operates iteratively in two stages: first, it collects all bigrams of co-occurring `lexemes` in the corpus. A measure is calculated on the set of all bigrams to determine a winner. The two lexemes that comprise the winning bigram are merged into a single lexeme. Instances of that bigram in the corpus are replaced with the merged lexeme. All bigrams are collected again on this new corpus and then the process repeats.
 
-At initialization, a `lexeme` consists of only a single token, but as the algorithm iterates lexemes become multi-word expressions formed from the winning bigrams. `Lexemes` contain two parts: a `word` which is a tuple of strings, and an `index` which represents the position of that specific token in a MWE. For example, if the winning bigram is `(you, know)`, occurences of that sequence of lexemes will be replaced with `[(you, know), 0]` and `[(you, know), 1]` in the corpus. When bigrams are counted, only a root lexeme (where the index is 0) can form a bigram, so merged tokens don't get double counted. For a more visual explanation of a few iterations assuming specific winners, see the image below.
+At initialization, a `lexeme` consists of only a single token, but as the algorithm iterates lexemes become multi-word expressions formed from the winning bigrams. `Lexemes` contain two parts: a `word` which is a tuple of strings, and an `index` which represents the position of that specific token in a MWE. For example, if the winning bigram is `(you, know)`, occurrences of that sequence of lexemes will be replaced with `[(you, know), 0]` and `[(you, know), 1]` in the corpus. When bigrams are counted, only a root lexeme (where the index is 0) can form a bigram, so merged tokens don't get double counted. For a more visual explanation of a few iterations assuming specific winners, see the image below.
 
 <img src="explanation.png" alt="An explanation of the remerge algorithm" width="350">
 
 #### Limitations
 
-**No tie-breaking logic** - I found this while testing and comparing to the original reference implementation. If two bigrams are tied for the winning metric, there is no tie-breaking mechanism. Both this implementation and the original implementation simply pick the first bigram from the index with the maximum value. We have slightly different implementation of how the bigram satistics table is created (i.e., the ordering of the index), which makes direct comparisons between implementations difficult.
+**No tie-breaking logic** - I found this while testing and comparing to the original reference implementation. If two bigrams are tied for the winning metric, there is no tie-breaking mechanism. Both this implementation and the original implementation simply pick the first bigram from the index with the maximum value. We have slightly different implementation of how the bigram statistics table is created (i.e., the ordering of the index), which makes direct comparisons between implementations difficult.
 
 #### Issues with Original Algorithm
 
 ##### Single Bigrams with discontinuities forming from distinct Lexeme positions
 
-One issue with discontinuities or gaps in the original algorithm is that it did not distinguish the position of a satellite lexeme occuring to the left or right of a bigram with a gap.
+One issue with discontinuities or gaps in the original algorithm is that it did not distinguish the position of a satellite lexeme occurring to the left or right of a bigram with a gap.
 
 Take for example these two example sentences, using `-` to represent an arbitrary token:
 
