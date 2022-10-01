@@ -12,7 +12,7 @@ authors:
     family-names: Baumgartner
 identifiers:
   - type: url
-    value: 'https://github.com/pmbaumgartner/remerge-mwe'
+    value: 'https://doi.org/10.5281/zenodo.7130548'
     description: >-
       GitHub repository for REMERGE - Multi-Word
       Expression discovery algorithm
