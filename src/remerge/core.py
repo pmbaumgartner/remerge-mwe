@@ -211,52 +211,71 @@ class WinnerInfo:
 def merge_winner(
     winner: WinnerInfo, lexeme_data: LexemeData, bigram_data: BigramData
 ) -> Tuple[LexemeData, BigramData]:
-    current_line = 0
+    bigram_lines = set(i[0] for i in winner.clean_bigram_locations())
+    old_bigrams_lookup = {
+        line_ix: list(lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items())
+        for line_ix in bigram_lines
+    }
     for (line_ix, word_ix) in winner.clean_bigram_locations():
-        newline = current_line != line_ix
-        # Capture Old
-        if newline:
-            # logic
-            old_root_lexemes = lexeme_data.locations_to_root_lexemes(
-                LineIndex(line_ix)
-            ).values()
-            old_bigrams = list(zip(old_root_lexemes, islice(old_root_lexemes, 1, None)))
-
-            current_line = line_ix
         # Do Updates
         for lexeme_index in range(winner.n_lexemes):
             pos = TokenIndex(word_ix + lexeme_index)
-            old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
+            try:
+                old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
+            except:
+                from IPython import embed
+
+                embed()
+            # old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
             lexeme = Lexeme(word=winner.merged_lexeme.word, ix=lexeme_index)
-            lexeme_data.lexemes_to_locations[lexeme].add((LineIndex(line_ix), pos))
+            if not lexeme.ix >= old_lexeme.ix:
+                from IPython import embed
+
+                embed()
             lexeme_data.locations_to_lexemes[line_ix][pos] = lexeme
             lexeme_data.lexemes_to_locations[old_lexeme].remove((line_ix, pos))
+            lexeme_data.lexemes_to_locations[lexeme].add((line_ix, pos))
         # Capture New and Do Updates
-        if newline:
-            new_root_lexemes_items = list(
-                lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items()
-            )
-            new_root_lexemes = (lex for _, lex in new_root_lexemes_items)
-            new_bigrams = list(zip(new_root_lexemes, islice(new_root_lexemes, 1, None)))
-            new_count = Counter(new_bigrams)
-            new_count.subtract(Counter(old_bigrams))
-            # print("both", new_count)
-            el1s: DefaultDict[Lexeme, int] = defaultdict(int)
-            el2s: DefaultDict[Lexeme, int] = defaultdict(int)
-            for (bigram, count) in new_count.items():
-                el1s[bigram[0]] += count
-                el2s[bigram[0]] += count
-            bigram_data.bigrams_to_freqs.update(new_count)
-            bigram_data.left_lex_freqs.update(el1s)
-            bigram_data.right_lex_freqs.update(el2s)
-            for (left_ix, left), (_, right) in zip(
-                new_root_lexemes_items, islice(new_root_lexemes_items, 1, None)
-            ):
-                bigram = (left, right)
-                location = (LineIndex(line_ix), TokenIndex(left_ix))
-                bigram_data.bigrams_to_locations[bigram].append(location)
+    for line_ix, lexemes in old_bigrams_lookup.items():
 
-                current_line = line_ix
+        old_bigrams = list(
+            zip([l[1] for l in lexemes], islice([l[1] for l in lexemes], 1, None))
+        )
+
+        new_root_lexemes_items = list(
+            lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items()
+        )
+        new_root_lexemes = list(lex for _, lex in new_root_lexemes_items)
+        new_bigrams = list(zip(new_root_lexemes, islice(new_root_lexemes, 1, None)))
+        if any(i[1].ix != 0 for i in new_bigrams):
+            print(new_bigrams)
+        assert new_bigrams != old_bigrams, (
+            new_bigrams,
+            old_bigrams,
+            lexeme_data.render_corpus()[line_ix],
+            line_ix,
+            winner.merged_lexeme,
+        )
+
+        bigram_data.bigrams_to_freqs.update(new_bigrams)
+        bigram_data.left_lex_freqs.update([b[0] for b in new_bigrams])
+        bigram_data.right_lex_freqs.update([b[1] for b in new_bigrams])
+
+        bigram_data.bigrams_to_freqs.subtract(old_bigrams)
+        bigram_data.left_lex_freqs.subtract([b[0] for b in old_bigrams])
+        bigram_data.right_lex_freqs.subtract([b[1] for b in old_bigrams])
+
+        for (left_ix, left), (_, right) in zip(lexemes, islice(lexemes, 1, None)):
+            bigram = (left, right)
+            location = (LineIndex(line_ix), TokenIndex(left_ix))
+            bigram_data.bigrams_to_locations[bigram].remove(location)
+
+        for (left_ix, left), (_, right) in zip(
+            new_root_lexemes_items, islice(new_root_lexemes_items, 1, None)
+        ):
+            bigram = (left, right)
+            location = (LineIndex(line_ix), TokenIndex(left_ix))
+            bigram_data.bigrams_to_locations[bigram].append(location)
 
     lexeme_data.lexemes_to_freqs[winner.merged_lexeme] = winner.merge_token_count
 
@@ -284,52 +303,8 @@ def merge_winner(
     bigram_data.right_lex_freqs = Counter(
         {k: v for k, v in bigram_data.right_lex_freqs.items() if v > 0}
     )
+    assert winner.bigram not in bigram_data.bigrams_to_freqs
     return lexeme_data, bigram_data
-
-
-def update_bigrams(
-    winner: WinnerInfo,
-    old_lexemes: LexemeData,
-    new_lexemes: LexemeData,
-    bigrams: BigramData,
-):
-    """Needs updated lexemes to function correctly."""
-    winner_lines = set(w[0] for w in winner.bigram_locations)
-    for line_ix in winner_lines:
-        old_root_lexemes = (
-            lex
-            for _, lex in old_lexemes.locations_to_root_lexemes(
-                LineIndex(line_ix)
-            ).items()
-        )
-        # We need these to update locations still, so we capture as a list
-        new_root_lexemes_items = list(
-            new_lexemes.locations_to_root_lexemes(LineIndex(line_ix)).items()
-        )
-        new_root_lexemes = (lex for _, lex in new_root_lexemes_items)
-        old_bigrams = list(zip(old_root_lexemes, islice(old_root_lexemes, 1, None)))
-        new_bigrams = list(zip(new_root_lexemes, islice(new_root_lexemes, 1, None)))
-        # print("new", Counter(new_bigrams))
-        # print("old", Counter(old_bigrams))
-        new_count = Counter(new_bigrams)
-        new_count.subtract(Counter(old_bigrams))
-        # print("both", new_count)
-        el1s: DefaultDict[Lexeme, int] = defaultdict(int)
-        el2s: DefaultDict[Lexeme, int] = defaultdict(int)
-        for (bigram, count) in new_count.items():
-            el1s[bigram[0]] += count
-            el2s[bigram[0]] += count
-        bigrams.bigrams_to_freqs.update(new_count)
-        bigrams.left_lex_freqs.update(el1s)
-        bigrams.right_lex_freqs.update(el2s)
-        # TODO ADD LOCATION
-        for (left_ix, left), (_, right) in zip(
-            new_root_lexemes_items, islice(new_root_lexemes_items, 1, None)
-        ):
-            bigram = (left, right)
-            location = (LineIndex(line_ix), TokenIndex(left_ix))
-            bigrams.bigrams_to_locations[bigram].append(location)
-    return bigrams
 
 
 @dataclass(frozen=True)
@@ -341,7 +316,6 @@ class BigramFreqArrays:
     el1_freq_array: npt.NDArray[np.int_]
     el2_freq_array: npt.NDArray[np.int_]
 
-    @cached_property
     def bigram_count(self) -> np.int_:
         return self.bigram_freq_array.sum()
 
@@ -410,12 +384,12 @@ def _calculate_log_likelihood(data: BigramFreqArrays) -> npt.NDArray[np.float_]:
     obsA = data.bigram_freq_array
     obsB = data.el1_freq_array - obsA
     obsC = data.el2_freq_array - obsA
-    obsD = data.bigram_count - obsA - obsB - obsC
+    obsD = data.bigram_count() - obsA - obsB - obsC
     # http://ecologyandevolution.org/statsdocs/online-stats-manual-chapter4.html
-    expA = ((obsA + obsB) * (obsA + obsC)) / data.bigram_count
-    expB = ((obsA + obsB) * (obsB + obsD)) / data.bigram_count
-    expC = ((obsC + obsD) * (obsA + obsC)) / data.bigram_count
-    expD = ((obsC + obsD) * (obsB + obsD)) / data.bigram_count
+    expA = ((obsA + obsB) * (obsA + obsC)) / data.bigram_count()
+    expB = ((obsA + obsB) * (obsB + obsD)) / data.bigram_count()
+    expC = ((obsC + obsD) * (obsA + obsC)) / data.bigram_count()
+    expD = ((obsC + obsD) * (obsB + obsD)) / data.bigram_count()
 
     llA = obsA * np.log((obsA / (expA + _SMALL)) + _SMALL)
     llB = obsB * np.log((obsB / (expB + _SMALL)) + _SMALL)
