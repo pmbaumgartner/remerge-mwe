@@ -2,8 +2,8 @@ import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import cached_property
-from itertools import groupby
+from functools import cached_property, lru_cache
+from itertools import groupby, islice
 from pathlib import Path
 from typing import Callable, Literal
 from typing import Counter as CounterType
@@ -38,7 +38,17 @@ class Lexeme(NamedTuple):
     ix: int
 
     def __repr__(self) -> str:
-        return f"({self.word}, {self.ix})"
+        return f"({self.word}|{self.ix})"
+
+
+@lru_cache
+def stringify_lexeme(lexeme: Lexeme):
+    return json.dumps(lexeme.word)
+
+
+@lru_cache
+def destringify_lexeme(string: str):
+    return Lexeme(tuple(json.loads(string)), 0)
 
 
 LineIndex = NewType("LineIndex", int)
@@ -50,9 +60,7 @@ class LexemeData:
     lexemes_to_locations: DefaultDict[
         Lexeme, Set[Tuple[LineIndex, TokenIndex]]
     ] = field(default_factory=lambda: defaultdict(set))
-    locations_to_lexemes: DefaultDict[LineIndex, Dict[TokenIndex, Lexeme]] = field(
-        default_factory=lambda: defaultdict(dict)
-    )
+    locations_to_lexemes: List[List[Lexeme]] = field(default_factory=list)
     lexemes_to_freqs: Dict[Lexeme, int] = field(default_factory=dict)
 
     @classmethod
@@ -70,13 +78,15 @@ class LexemeData:
                 total=total,
             )
         for (line_ix, tokens) in corpus_iter:
+            line_lexemes = []
             for (word_ix, word) in enumerate(tokens):
                 line_ix = LineIndex(line_ix)
                 word_ix = TokenIndex(word_ix)
                 lexeme = Lexeme(word=(word,), ix=0)
                 loc = (line_ix, word_ix)
                 lexeme_data.lexemes_to_locations[lexeme].add(loc)
-                lexeme_data.locations_to_lexemes[line_ix][word_ix] = lexeme
+                line_lexemes.append(lexeme)
+            lexeme_data.locations_to_lexemes.append(line_lexemes)
 
         # NOTE: Using this conditional prevents double counting merged lexemes.
         lexeme_data.lexemes_to_freqs = {
@@ -87,35 +97,34 @@ class LexemeData:
     @property
     def corpus_length(self) -> int:
         """Returns number of lines in corpus: max(line_ix) + 1."""
-        return max(self.locations_to_lexemes.keys()) + 1
+        return len(self.locations_to_lexemes)
 
     def render_corpus(self) -> List[List[Lexeme]]:
-        rendered_corpus: List[List[Lexeme]] = []
-        for line_ix in self.locations_to_lexemes:
-            line_tokens = []
-            for token_ix in self.locations_to_lexemes[line_ix]:
-                line_tokens.append(self.locations_to_lexemes[line_ix][token_ix])
-            rendered_corpus.append(line_tokens)
-        return rendered_corpus
+        return self.locations_to_lexemes
 
     def locations_to_root_lexemes(self, line: LineIndex) -> Dict[TokenIndex, Lexeme]:
         lexeme_dicts = self.locations_to_lexemes[line]
-        return {k: v for k, v in lexeme_dicts.items() if v.ix == 0}
+        return {TokenIndex(k): v for k, v in enumerate(lexeme_dicts) if v.ix == 0}
 
 
-class Bigram(NamedTuple):
-    el1: Lexeme
-    el2: Lexeme
+Bigram = Tuple[Lexeme, Lexeme]
+
+
+def _count_bigram_line(*args):
+    el1c = [b[0] for b in args]
+    el2c = [b[1] for b in args]
+    bc = [b for b in args]
+    return (el1c, el2c, bc)
 
 
 @dataclass
 class BigramData:
     bigrams_to_freqs: CounterType[Bigram] = field(default_factory=Counter)
-    bigrams_to_locations: Dict[Bigram, Set[Tuple[LineIndex, TokenIndex]]] = field(
-        default_factory=lambda: defaultdict(set)
+    bigrams_to_locations: Dict[Bigram, List[Tuple[LineIndex, TokenIndex]]] = field(
+        default_factory=lambda: defaultdict(list)
     )
-    left_lex_freqs: Dict[Lexeme, int] = field(default_factory=dict)
-    right_lex_freqs: Dict[Lexeme, int] = field(default_factory=dict)
+    left_lex_freqs: CounterType[Lexeme] = field(default_factory=Counter)
+    right_lex_freqs: CounterType[Lexeme] = field(default_factory=Counter)
 
     @classmethod
     def from_lexemes(
@@ -132,26 +141,23 @@ class BigramData:
             )
         for line_ix in corpus_iter:
             line_lexeme_data = lexeme_data.locations_to_root_lexemes(LineIndex(line_ix))
-            line_items = list(line_lexeme_data.items())
-            for (left_ix, left), (_, right) in zip(line_items, line_items[1:]):
-                bigram = Bigram(el1=left, el2=right)
+            line_items = line_lexeme_data.items()
+            line_bigrams = []
+            for (left_ix, left), (_, right) in zip(
+                line_items, islice(line_items, 1, None)
+            ):
+                bigram = (left, right)
                 location = (LineIndex(line_ix), TokenIndex(left_ix))
-                bigram_data.add_bigram(bigram, location)
+                bigram_data.bigrams_to_locations[bigram].append(location)
+                line_bigrams.append(bigram)
+            bigram_data.batch_add_bigrams(line_bigrams)
         return bigram_data
 
-    def add_bigram(
-        self, bigram: Bigram, location: Tuple[LineIndex, TokenIndex]
-    ) -> None:
-        if self.left_lex_freqs.get(bigram.el1, None):
-            self.left_lex_freqs[bigram.el1] += 1
-        else:
-            self.left_lex_freqs[bigram.el1] = 1
-        if self.right_lex_freqs.get(bigram.el2, None):
-            self.right_lex_freqs[bigram.el2] += 1
-        else:
-            self.right_lex_freqs[bigram.el2] = 1
-        self.bigrams_to_freqs[bigram] += 1
-        self.bigrams_to_locations[bigram].add(location)
+    def batch_add_bigrams(self, bigram_locations: List[Bigram]):
+        el1s, el2s, bigrams = _count_bigram_line(*bigram_locations)
+        self.left_lex_freqs.update(el1s)
+        self.right_lex_freqs.update(el2s)
+        self.bigrams_to_freqs.update(bigrams)
 
     @property
     def bigram_count(self) -> int:
@@ -169,8 +175,8 @@ class WinnerInfo:
     def from_bigram_with_data(
         cls, bigram: Bigram, bigram_data: BigramData
     ) -> "WinnerInfo":
-        el1_words = list(bigram.el1.word)
-        el2_words = list(bigram.el2.word)
+        el1_words = list(bigram[0].word)
+        el2_words = list(bigram[1].word)
         all_words = el1_words + el2_words
         new_lexeme = Lexeme(word=tuple(all_words), ix=0)
         locations = sorted(bigram_data.bigrams_to_locations[bigram])
@@ -221,13 +227,13 @@ def merge_winner(winner: WinnerInfo, lexeme_data: LexemeData) -> LexemeData:
 
     lexeme_data.lexemes_to_freqs[winner.merged_lexeme] = winner.merge_token_count
 
-    el1_freq = lexeme_data.lexemes_to_freqs[winner.bigram.el1]
+    el1_freq = lexeme_data.lexemes_to_freqs[winner.bigram[0]]
     new_el1_freq = el1_freq - winner.merge_token_count
-    lexeme_data.lexemes_to_freqs[winner.bigram.el1] = new_el1_freq
+    lexeme_data.lexemes_to_freqs[winner.bigram[0]] = new_el1_freq
 
-    el2_freq = lexeme_data.lexemes_to_freqs[winner.bigram.el2]
+    el2_freq = lexeme_data.lexemes_to_freqs[winner.bigram[1]]
     new_el2_freq = el2_freq - winner.merge_token_count
-    lexeme_data.lexemes_to_freqs[winner.bigram.el2] = new_el2_freq
+    lexeme_data.lexemes_to_freqs[winner.bigram[1]] = new_el2_freq
 
     lexeme_data.lexemes_to_freqs = {
         k: v for k, v in lexeme_data.lexemes_to_freqs.items() if v != 0
@@ -267,9 +273,9 @@ class BigramFreqArrays:
             if freq < min_count:
                 continue
             bigram_freq_array[i] = freq
-            l1 = bigram_data.left_lex_freqs[bigram.el1]
+            l1 = bigram_data.left_lex_freqs[bigram[0]]
             el1_freq_array[i] = l1
-            l2 = bigram_data.right_lex_freqs[bigram.el2]
+            l2 = bigram_data.right_lex_freqs[bigram[1]]
             el2_freq_array[i] = l2
             bigram_index.append(bigram)
             i += 1
@@ -375,5 +381,9 @@ def run(
         lexemes = merge_winner(winner, lexemes)
         bigrams = BigramData.from_lexemes(lexemes)
         if isinstance(iterations_iter, tqdm):
-            iterations_iter.set_postfix({"last_winner": winner.merged_lexeme.word})
+            lines = set(w[0] for w in winner.bigram_locations)
+            pct_bgr = len(lines) / lexemes.corpus_length
+            iterations_iter.set_postfix(
+                {"last_winner": winner.merged_lexeme.word, "pct_bgr": f"{pct_bgr:.2f}"}
+            )
     return winners
