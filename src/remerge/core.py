@@ -41,16 +41,6 @@ class Lexeme(NamedTuple):
         return f"({self.word}|{self.ix})"
 
 
-@lru_cache
-def stringify_lexeme(lexeme: Lexeme):
-    return json.dumps(lexeme.word)
-
-
-@lru_cache
-def destringify_lexeme(string: str):
-    return Lexeme(tuple(json.loads(string)), 0)
-
-
 LineIndex = NewType("LineIndex", int)
 TokenIndex = NewType("TokenIndex", int)
 
