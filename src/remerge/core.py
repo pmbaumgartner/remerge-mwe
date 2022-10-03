@@ -1,17 +1,20 @@
 import json
 from collections import Counter, defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import cached_property, lru_cache
+from functools import cached_property
 from itertools import groupby, islice
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable
 from typing import Counter as CounterType
 from typing import (
     DefaultDict,
     Dict,
+    Final,
     Iterable,
     List,
+    Literal,
     NamedTuple,
     NewType,
     Optional,
@@ -24,7 +27,7 @@ import numpy as np
 import numpy.typing as npt
 from tqdm import tqdm, trange
 
-_SMALL = 1e-10
+_SMALL: Final[float] = 1e-10
 
 
 class SelectionMethod(str, Enum):
@@ -234,6 +237,51 @@ def merge_winner(winner: WinnerInfo, lexeme_data: LexemeData) -> LexemeData:
     return lexeme_data
 
 
+def update_bigrams(
+    winner: WinnerInfo,
+    old_lexemes: LexemeData,
+    new_lexemes: LexemeData,
+    bigrams: BigramData,
+):
+    """Needs updated lexemes to function correctly."""
+    winner_lines = set(w[0] for w in winner.bigram_locations)
+    for line_ix in winner_lines:
+        old_root_lexemes = (
+            lex
+            for _, lex in old_lexemes.locations_to_root_lexemes(
+                LineIndex(line_ix)
+            ).items()
+        )
+        # We need these to update locations still, so we capture as a list
+        new_root_lexemes_items = list(
+            new_lexemes.locations_to_root_lexemes(LineIndex(line_ix)).items()
+        )
+        new_root_lexemes = (lex for _, lex in new_root_lexemes_items)
+        old_bigrams = list(zip(old_root_lexemes, islice(old_root_lexemes, 1, None)))
+        new_bigrams = list(zip(new_root_lexemes, islice(new_root_lexemes, 1, None)))
+        # print("new", Counter(new_bigrams))
+        # print("old", Counter(old_bigrams))
+        new_count = Counter(new_bigrams)
+        new_count.subtract(Counter(old_bigrams))
+        # print("both", new_count)
+        el1s: DefaultDict[Lexeme, int] = defaultdict(int)
+        el2s: DefaultDict[Lexeme, int] = defaultdict(int)
+        for (bigram, count) in new_count.items():
+            el1s[bigram[0]] += count
+            el2s[bigram[0]] += count
+        bigrams.bigrams_to_freqs.update(new_count)
+        bigrams.left_lex_freqs.update(el1s)
+        bigrams.right_lex_freqs.update(el2s)
+        # TODO ADD LOCATION
+        for (left_ix, left), (_, right) in zip(
+            new_root_lexemes_items, islice(new_root_lexemes_items, 1, None)
+        ):
+            bigram = (left, right)
+            location = (LineIndex(line_ix), TokenIndex(left_ix))
+            bigrams.bigrams_to_locations[bigram].append(location)
+    return bigrams
+
+
 @dataclass(frozen=True)
 class BigramFreqArrays:
     # This would be a NamedTuple, but those don't support
@@ -368,8 +416,9 @@ def run(
         if output:
             winner_lexemes = {i: w.merged_lexeme.word for i, w in enumerate(winners)}
             output.write_text(json.dumps(winner_lexemes))
+        old_lexemes = deepcopy(lexemes)
         lexemes = merge_winner(winner, lexemes)
-        bigrams = BigramData.from_lexemes(lexemes)
+        bigrams = update_bigrams(winner, old_lexemes, lexemes, bigrams)
         if isinstance(iterations_iter, tqdm):
             lines = set(w[0] for w in winner.bigram_locations)
             pct_bgr = len(lines) / lexemes.corpus_length
