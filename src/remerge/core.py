@@ -208,8 +208,22 @@ class WinnerInfo:
         return len(self.clean_bigram_locations())
 
 
-def merge_winner(winner: WinnerInfo, lexeme_data: LexemeData) -> LexemeData:
+def merge_winner(
+    winner: WinnerInfo, lexeme_data: LexemeData, bigram_data: BigramData
+) -> Tuple[LexemeData, BigramData]:
+    current_line = 0
     for (line_ix, word_ix) in winner.clean_bigram_locations():
+        newline = current_line != line_ix
+        # Capture Old
+        if newline:
+            # logic
+            old_root_lexemes = lexeme_data.locations_to_root_lexemes(
+                LineIndex(line_ix)
+            ).values()
+            old_bigrams = list(zip(old_root_lexemes, islice(old_root_lexemes, 1, None)))
+
+            current_line = line_ix
+        # Do Updates
         for lexeme_index in range(winner.n_lexemes):
             pos = TokenIndex(word_ix + lexeme_index)
             old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
@@ -217,6 +231,32 @@ def merge_winner(winner: WinnerInfo, lexeme_data: LexemeData) -> LexemeData:
             lexeme_data.lexemes_to_locations[lexeme].add((LineIndex(line_ix), pos))
             lexeme_data.locations_to_lexemes[line_ix][pos] = lexeme
             lexeme_data.lexemes_to_locations[old_lexeme].remove((line_ix, pos))
+        # Capture New and Do Updates
+        if newline:
+            new_root_lexemes_items = list(
+                lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items()
+            )
+            new_root_lexemes = (lex for _, lex in new_root_lexemes_items)
+            new_bigrams = list(zip(new_root_lexemes, islice(new_root_lexemes, 1, None)))
+            new_count = Counter(new_bigrams)
+            new_count.subtract(Counter(old_bigrams))
+            # print("both", new_count)
+            el1s: DefaultDict[Lexeme, int] = defaultdict(int)
+            el2s: DefaultDict[Lexeme, int] = defaultdict(int)
+            for (bigram, count) in new_count.items():
+                el1s[bigram[0]] += count
+                el2s[bigram[0]] += count
+            bigram_data.bigrams_to_freqs.update(new_count)
+            bigram_data.left_lex_freqs.update(el1s)
+            bigram_data.right_lex_freqs.update(el2s)
+            for (left_ix, left), (_, right) in zip(
+                new_root_lexemes_items, islice(new_root_lexemes_items, 1, None)
+            ):
+                bigram = (left, right)
+                location = (LineIndex(line_ix), TokenIndex(left_ix))
+                bigram_data.bigrams_to_locations[bigram].append(location)
+
+                current_line = line_ix
 
     lexeme_data.lexemes_to_freqs[winner.merged_lexeme] = winner.merge_token_count
 
@@ -234,7 +274,17 @@ def merge_winner(winner: WinnerInfo, lexeme_data: LexemeData) -> LexemeData:
     lexeme_data.lexemes_to_locations = defaultdict(
         set, {k: v for k, v in lexeme_data.lexemes_to_locations.items() if v != set()}
     )
-    return lexeme_data
+
+    bigram_data.bigrams_to_freqs = Counter(
+        {k: v for k, v in bigram_data.bigrams_to_freqs.items() if v > 0}
+    )
+    bigram_data.left_lex_freqs = Counter(
+        {k: v for k, v in bigram_data.left_lex_freqs.items() if v > 0}
+    )
+    bigram_data.right_lex_freqs = Counter(
+        {k: v for k, v in bigram_data.right_lex_freqs.items() if v > 0}
+    )
+    return lexeme_data, bigram_data
 
 
 def update_bigrams(
@@ -416,9 +466,7 @@ def run(
         if output:
             winner_lexemes = {i: w.merged_lexeme.word for i, w in enumerate(winners)}
             output.write_text(json.dumps(winner_lexemes))
-        old_lexemes = deepcopy(lexemes)
-        lexemes = merge_winner(winner, lexemes)
-        bigrams = update_bigrams(winner, old_lexemes, lexemes, bigrams)
+        lexemes, bigrams = merge_winner(winner, lexemes, bigrams)
         if isinstance(iterations_iter, tqdm):
             lines = set(w[0] for w in winner.bigram_locations)
             pct_bgr = len(lines) / lexemes.corpus_length
