@@ -1,17 +1,20 @@
 import json
 from collections import Counter, defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
-from functools import cached_property, lru_cache
+from functools import cached_property
 from itertools import groupby, islice
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable
 from typing import Counter as CounterType
 from typing import (
     DefaultDict,
     Dict,
+    Final,
     Iterable,
     List,
+    Literal,
     NamedTuple,
     NewType,
     Optional,
@@ -24,7 +27,7 @@ import numpy as np
 import numpy.typing as npt
 from tqdm import tqdm, trange
 
-_SMALL = 1e-10
+_SMALL: Final[float] = 1e-10
 
 
 class SelectionMethod(str, Enum):
@@ -205,15 +208,54 @@ class WinnerInfo:
         return len(self.clean_bigram_locations())
 
 
-def merge_winner(winner: WinnerInfo, lexeme_data: LexemeData) -> LexemeData:
+def merge_winner(
+    winner: WinnerInfo, lexeme_data: LexemeData, bigram_data: BigramData
+) -> Tuple[LexemeData, BigramData]:
+    bigram_lines = set(i[0] for i in winner.clean_bigram_locations())
+    old_bigrams_lookup = {
+        line_ix: list(lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items())
+        for line_ix in bigram_lines
+    }
     for (line_ix, word_ix) in winner.clean_bigram_locations():
+        # Do Updates
         for lexeme_index in range(winner.n_lexemes):
             pos = TokenIndex(word_ix + lexeme_index)
             old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
             lexeme = Lexeme(word=winner.merged_lexeme.word, ix=lexeme_index)
-            lexeme_data.lexemes_to_locations[lexeme].add((LineIndex(line_ix), pos))
             lexeme_data.locations_to_lexemes[line_ix][pos] = lexeme
             lexeme_data.lexemes_to_locations[old_lexeme].remove((line_ix, pos))
+            lexeme_data.lexemes_to_locations[lexeme].add((line_ix, pos))
+    for line_ix, lexemes in old_bigrams_lookup.items():
+
+        old_bigrams = list(
+            zip([l[1] for l in lexemes], islice([l[1] for l in lexemes], 1, None))
+        )
+
+        new_root_lexemes_items = list(
+            lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items()
+        )
+        new_root_lexemes = list(lex for _, lex in new_root_lexemes_items)
+        new_bigrams = list(zip(new_root_lexemes, islice(new_root_lexemes, 1, None)))
+
+        bigram_data.bigrams_to_freqs.update(new_bigrams)
+        bigram_data.left_lex_freqs.update([b[0] for b in new_bigrams])
+        bigram_data.right_lex_freqs.update([b[1] for b in new_bigrams])
+
+        bigram_data.bigrams_to_freqs.subtract(old_bigrams)
+        bigram_data.left_lex_freqs.subtract([b[0] for b in old_bigrams])
+        bigram_data.right_lex_freqs.subtract([b[1] for b in old_bigrams])
+
+        for (left_ix, left), (_, right) in zip(lexemes, islice(lexemes, 1, None)):
+            bigram = (left, right)
+            location = (LineIndex(line_ix), TokenIndex(left_ix))
+            bigram_data.bigrams_to_locations[bigram].remove(location)
+
+        for (left_ix, left), (_, right) in zip(
+            new_root_lexemes_items, islice(new_root_lexemes_items, 1, None)
+        ):
+            bigram = (left, right)
+            location = (LineIndex(line_ix), TokenIndex(left_ix))
+            bigram_data.bigrams_to_locations[bigram].append(location)
 
     lexeme_data.lexemes_to_freqs[winner.merged_lexeme] = winner.merge_token_count
 
@@ -231,13 +273,23 @@ def merge_winner(winner: WinnerInfo, lexeme_data: LexemeData) -> LexemeData:
     lexeme_data.lexemes_to_locations = defaultdict(
         set, {k: v for k, v in lexeme_data.lexemes_to_locations.items() if v != set()}
     )
-    return lexeme_data
+
+    bigram_data.bigrams_to_freqs = Counter(
+        {k: v for k, v in bigram_data.bigrams_to_freqs.items() if v > 0}
+    )
+    bigram_data.left_lex_freqs = Counter(
+        {k: v for k, v in bigram_data.left_lex_freqs.items() if v > 0}
+    )
+    bigram_data.right_lex_freqs = Counter(
+        {k: v for k, v in bigram_data.right_lex_freqs.items() if v > 0}
+    )
+    assert winner.bigram not in bigram_data.bigrams_to_freqs
+    return lexeme_data, bigram_data
 
 
+# NamedTuple doesn't support cached_property
 @dataclass(frozen=True)
 class BigramFreqArrays:
-    # This would be a NamedTuple, but those don't support
-    # cached_property
     bigram_index: List[Bigram]
     bigram_freq_array: npt.NDArray[np.int_]
     el1_freq_array: npt.NDArray[np.int_]
@@ -305,15 +357,12 @@ def _calculate_npmi(data: BigramFreqArrays) -> npt.NDArray[np.float_]:
 
 def _calculate_log_likelihood(data: BigramFreqArrays) -> npt.NDArray[np.float_]:
     # For reference, see also: nltk.collocations.BigramAssocMeasures, specifically _contingency
-    # obsA = data.bigram_freq_array
-    # obsB = data.el1_freq_array
-    # obsC = data.el2_freq_array
-    # obsD = data.bigram_count - (obsA + obsB + obsC)
+    # http://ecologyandevolution.org/statsdocs/online-stats-manual-chapter4.html
     obsA = data.bigram_freq_array
     obsB = data.el1_freq_array - obsA
     obsC = data.el2_freq_array - obsA
     obsD = data.bigram_count - obsA - obsB - obsC
-    # http://ecologyandevolution.org/statsdocs/online-stats-manual-chapter4.html
+
     expA = ((obsA + obsB) * (obsA + obsC)) / data.bigram_count
     expB = ((obsA + obsB) * (obsB + obsD)) / data.bigram_count
     expC = ((obsC + obsD) * (obsA + obsC)) / data.bigram_count
@@ -368,12 +417,14 @@ def run(
         if output:
             winner_lexemes = {i: w.merged_lexeme.word for i, w in enumerate(winners)}
             output.write_text(json.dumps(winner_lexemes))
-        lexemes = merge_winner(winner, lexemes)
-        bigrams = BigramData.from_lexemes(lexemes)
+        lexemes, bigrams = merge_winner(winner, lexemes, bigrams)
         if isinstance(iterations_iter, tqdm):
             lines = set(w[0] for w in winner.bigram_locations)
             pct_bgr = len(lines) / lexemes.corpus_length
             iterations_iter.set_postfix(
-                {"last_winner": winner.merged_lexeme.word, "pct_bgr": f"{pct_bgr:.2f}"}
+                {
+                    "last_winner": winner.merged_lexeme.word,
+                    "pct_bgr": f"{pct_bgr*100:.1f}%",
+                }
             )
     return winners
