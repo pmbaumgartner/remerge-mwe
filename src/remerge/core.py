@@ -220,18 +220,11 @@ def merge_winner(
         # Do Updates
         for lexeme_index in range(winner.n_lexemes):
             pos = TokenIndex(word_ix + lexeme_index)
-            try:
-                old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
-            except:
-                from IPython import embed
+            old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
 
-                embed()
             # old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
             lexeme = Lexeme(word=winner.merged_lexeme.word, ix=lexeme_index)
-            if not lexeme.ix >= old_lexeme.ix:
-                from IPython import embed
 
-                embed()
             lexeme_data.locations_to_lexemes[line_ix][pos] = lexeme
             lexeme_data.lexemes_to_locations[old_lexeme].remove((line_ix, pos))
             lexeme_data.lexemes_to_locations[lexeme].add((line_ix, pos))
@@ -247,15 +240,6 @@ def merge_winner(
         )
         new_root_lexemes = list(lex for _, lex in new_root_lexemes_items)
         new_bigrams = list(zip(new_root_lexemes, islice(new_root_lexemes, 1, None)))
-        if any(i[1].ix != 0 for i in new_bigrams):
-            print(new_bigrams)
-        assert new_bigrams != old_bigrams, (
-            new_bigrams,
-            old_bigrams,
-            lexeme_data.render_corpus()[line_ix],
-            line_ix,
-            winner.merged_lexeme,
-        )
 
         bigram_data.bigrams_to_freqs.update(new_bigrams)
         bigram_data.left_lex_freqs.update([b[0] for b in new_bigrams])
@@ -316,6 +300,7 @@ class BigramFreqArrays:
     el1_freq_array: npt.NDArray[np.int_]
     el2_freq_array: npt.NDArray[np.int_]
 
+    @cached_property
     def bigram_count(self) -> np.int_:
         return self.bigram_freq_array.sum()
 
@@ -377,19 +362,16 @@ def _calculate_npmi(data: BigramFreqArrays) -> npt.NDArray[np.float_]:
 
 def _calculate_log_likelihood(data: BigramFreqArrays) -> npt.NDArray[np.float_]:
     # For reference, see also: nltk.collocations.BigramAssocMeasures, specifically _contingency
-    # obsA = data.bigram_freq_array
-    # obsB = data.el1_freq_array
-    # obsC = data.el2_freq_array
-    # obsD = data.bigram_count - (obsA + obsB + obsC)
+    # http://ecologyandevolution.org/statsdocs/online-stats-manual-chapter4.html
     obsA = data.bigram_freq_array
     obsB = data.el1_freq_array - obsA
     obsC = data.el2_freq_array - obsA
-    obsD = data.bigram_count() - obsA - obsB - obsC
-    # http://ecologyandevolution.org/statsdocs/online-stats-manual-chapter4.html
-    expA = ((obsA + obsB) * (obsA + obsC)) / data.bigram_count()
-    expB = ((obsA + obsB) * (obsB + obsD)) / data.bigram_count()
-    expC = ((obsC + obsD) * (obsA + obsC)) / data.bigram_count()
-    expD = ((obsC + obsD) * (obsB + obsD)) / data.bigram_count()
+    obsD = data.bigram_count - obsA - obsB - obsC
+
+    expA = ((obsA + obsB) * (obsA + obsC)) / data.bigram_count
+    expB = ((obsA + obsB) * (obsB + obsD)) / data.bigram_count
+    expC = ((obsC + obsD) * (obsA + obsC)) / data.bigram_count
+    expD = ((obsC + obsD) * (obsB + obsD)) / data.bigram_count
 
     llA = obsA * np.log((obsA / (expA + _SMALL)) + _SMALL)
     llB = obsB * np.log((obsB / (expB + _SMALL)) + _SMALL)
@@ -445,6 +427,9 @@ def run(
             lines = set(w[0] for w in winner.bigram_locations)
             pct_bgr = len(lines) / lexemes.corpus_length
             iterations_iter.set_postfix(
-                {"last_winner": winner.merged_lexeme.word, "pct_bgr": f"{pct_bgr:.2f}"}
+                {
+                    "last_winner": winner.merged_lexeme.word,
+                    "pct_bgr": f"{pct_bgr*100:.1f}%",
+                }
             )
     return winners
