@@ -221,14 +221,10 @@ def merge_winner(
         for lexeme_index in range(winner.n_lexemes):
             pos = TokenIndex(word_ix + lexeme_index)
             old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
-
-            # old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
             lexeme = Lexeme(word=winner.merged_lexeme.word, ix=lexeme_index)
-
             lexeme_data.locations_to_lexemes[line_ix][pos] = lexeme
             lexeme_data.lexemes_to_locations[old_lexeme].remove((line_ix, pos))
             lexeme_data.lexemes_to_locations[lexeme].add((line_ix, pos))
-        # Capture New and Do Updates
     for line_ix, lexemes in old_bigrams_lookup.items():
 
         old_bigrams = list(
@@ -291,10 +287,9 @@ def merge_winner(
     return lexeme_data, bigram_data
 
 
+# NamedTuple doesn't support cached_property
 @dataclass(frozen=True)
 class BigramFreqArrays:
-    # This would be a NamedTuple, but those don't support
-    # cached_property
     bigram_index: List[Bigram]
     bigram_freq_array: npt.NDArray[np.int_]
     el1_freq_array: npt.NDArray[np.int_]
