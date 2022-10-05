@@ -13,7 +13,7 @@ The code was originally derived from an existing implementation from the origina
 - corrections for merging sequential bigrams greedily and completely.
   - e.g. `'ya ya ya ya'` -> `'(ya ya) (ya ya)'` -> `'(ya ya ya ya)'`. Previously the merge order was non-deterministic, and you could end up with `'ya (ya ya) ya'`
 - An overall simplification of the algorithm. 
-  - As a tradeoff, this version may be less efficient. After a bigram is merged into a single lexeme in the original implementation, new bigrams and conflicting (old) bigrams were respectively added and subtracted from a mutable counter of bigrams. The counts of this object were difficult to track and validate, and resulted in errors in certain cases, so I removed this step. Instead, only the lexeme data is updated with the new merged lexemes, and bigram data is recreated from scratch using the lexeme data. There is certainly improvement for optimization here, particularly in the case where we are recalculating bigrams from lines that did not contain a merged lexeme and thus their bigram data did not change.
+  - As a tradeoff, this version may be less efficient. After a bigram is merged into a single lexeme in the original implementation, new bigrams and conflicting (old) bigrams were respectively added and subtracted from a mutable counter of bigrams. The counts of this object were difficult to track and validate, and resulted in errors in certain cases, so I removed this step. Instead, only the lexeme data is updated with the new merged lexemes. Then, we track which lines contain the merged lexeme and create an *update* counter that subtracts the old bigrams from the new bigrams and updates the bigram data using that counter.
 
 #### Usage
 
