@@ -30,10 +30,7 @@ from tqdm import tqdm, trange
 _SMALL: Final[float] = 1e-10
 
 
-class SelectionMethod(str, Enum):
-    frequency = "frequency"
-    log_likelihood = "log_likelihood"
-    npmi = "npmi"
+SelectionMethod = Literal["frequency", "log_likelihood", "npmi"]
 
 
 class Lexeme(NamedTuple):
@@ -81,7 +78,7 @@ class LexemeData:
                 line_lexemes.append(lexeme)
             lexeme_data.locations_to_lexemes.append(line_lexemes)
 
-        # NOTE: Using this conditional prevents double counting merged lexemes.
+        # Using this conditional prevents double counting merged lexemes.
         lexeme_data.lexemes_to_freqs = {
             k: len(v) for k, v in lexeme_data.lexemes_to_locations.items() if k.ix == 0
         }
@@ -152,11 +149,6 @@ class BigramData:
         self.right_lex_freqs.update(el2s)
         self.bigrams_to_freqs.update(bigrams)
 
-    @property
-    def bigram_count(self) -> int:
-        """Counts the total number of bigrams."""
-        return sum(self.bigrams_to_freqs.values())
-
 
 @dataclass
 class WinnerInfo:
@@ -217,7 +209,6 @@ def merge_winner(
         for line_ix in bigram_lines
     }
     for (line_ix, word_ix) in winner.clean_bigram_locations():
-        # Do Updates
         for lexeme_index in range(winner.n_lexemes):
             pos = TokenIndex(word_ix + lexeme_index)
             old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
@@ -379,30 +370,47 @@ def _calculate_log_likelihood(data: BigramFreqArrays) -> npt.NDArray[np.float_]:
 
 
 SELECTION_METHODS: Dict[SelectionMethod, Callable[[BigramData, int], Bigram]] = {
-    SelectionMethod.log_likelihood: calculate_winner_log_likelihood,
-    SelectionMethod.frequency: calculate_winner_frequency,
-    SelectionMethod.npmi: calculate_winner_npmi,
+    "log_likelihood": calculate_winner_log_likelihood,
+    "frequency": calculate_winner_frequency,
+    "npmi": calculate_winner_npmi,
 }
+
+ProgressBarOptions = Literal["all", "iterations", "none"]
 
 
 def run(
     corpus: List[List[str]],
     iterations: int,
     *,
-    method: SelectionMethod = SelectionMethod.log_likelihood,
+    method: SelectionMethod = "log_likelihood",
     min_count: int = 0,
     output: Optional[Path] = None,
-    progress_bar: Literal["all", "iterations", "none"] = "none",
+    progress_bar: ProgressBarOptions = "iterations",
 ) -> List[WinnerInfo]:
-    """If choosing NPMI as the selection method, prefer using min_count because:
+    """Run the remerge algorithm.
 
-    'infrequent word pairs tend to dominate the top of bigramme lists that are ranked after PMI'
+    Args:
+        corpus (List[List[str]]): A corpus of already tokenized texts.
+        iterations (int): The number of iterations to run the algorithm. Papers typically use >500.
+        method (SelectionMethod, optional): One of "frequency", "log_likelihood", or "npmi". Defaults to "log_likelihood".
+        min_count (int, optional): The minimum count required for a bigram to be included in the winner calculations.
+          If choosing NPMI ("npmi") as the selection method, prefer using min_count because this measure is biased towards
+          infrequent word pairs. Defaults to 0.
+        output (Optional[Path], optional): A file path to output the winning merged lexemes as JSON. Defaults to None.
+        progress_bar (ProgressBarOptions, optional): Verbosity of progress bar. "all" will display the lexeme and bigram
+          construction progress each iteration plus total iteration progress. "iterations" will display progress
+          on the total number of iterations. "none" has no output. Defaults to "iterations".
+
+    Returns:
+        List[WinnerInfo]: _description_
     """
     winners: List[WinnerInfo] = []
     all_progress = progress_bar == "all"
     lexemes = LexemeData.from_corpus(corpus, progress_bar=all_progress)
     bigrams = BigramData.from_lexemes(lexemes, progress_bar=all_progress)
     winner_selection_function = SELECTION_METHODS[method]
+    if output is not None:
+        print(f"Outputting winning merged lexemes to '{output}'")
     iterations_iter = (
         trange(iterations)
         if progress_bar in {"all", "iterations"}
