@@ -402,7 +402,7 @@ def run(
           on the total number of iterations. "none" has no output. Defaults to "iterations".
 
     Returns:
-        List[WinnerInfo]: _description_
+        List[WinnerInfo]: The winning bigram from each iteration.
     """
     winners: List[WinnerInfo] = []
     all_progress = progress_bar == "all"

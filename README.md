@@ -40,6 +40,17 @@ If using `NPMI` (`SelectionMethod.npmi`), you likely want to provide a `min_coun
 winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_count=25)
 ```
 
+#### API - `remerge.run`
+
+| Argument     | Type                           | Description                                                                                                                                                                                                                                                   |
+| ------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| corpus       | `List[List[str]]`              | A corpus of already tokenized texts.                                                                                                                                                                                                                          |
+| iterations   | `int`                          | The number of iterations to run the algorithm. Papers typically use >500.                                                                                                                                                                                     |
+| method       | `SelectionMethod`, optional    | One of "frequency", "log_likelihood", or "npmi". Defaults to "log_likelihood".                                                                                                                                                                                |
+| min_count    | `int`, optional                | The minimum count required for a bigram to be included in the winner calculations. If choosing NPMI ("npmi") as the selection method, prefer using min_count because this measure is biased towards infrequent word pairs. Defaults to 0.                     |
+| output       | `Optional[Path]`, optional     | A file path to output the winning merged lexemes as JSON. Defaults to None.                                                                                                                                                                                   |
+| progress_bar | `ProgressBarOptions`, optional | Verbosity of progress bar. "all" will display the lexeme and bigram construction progress each iteration plus total iteration progress. "iterations" will display progress on the total number of iterations. "none" has no output. Defaults to "iterations". |
+
 #### Install
 
 Latest release:
