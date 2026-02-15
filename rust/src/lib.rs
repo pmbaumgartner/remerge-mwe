@@ -158,16 +158,20 @@ impl LexemeData {
 #[derive(Default)]
 struct BigramData {
     bigrams_to_freqs: HashMap<Bigram, i64>,
-    bigrams_first_seen_order: HashMap<Bigram, usize>,
+    bigrams_first_seen_order: Option<HashMap<Bigram, usize>>,
     next_bigram_order: usize,
+    total_bigram_count: i64,
     bigrams_to_locations: HashMap<Bigram, HashSet<Location>>,
     left_lex_freqs: HashMap<Lexeme, i64>,
     right_lex_freqs: HashMap<Lexeme, i64>,
 }
 
 impl BigramData {
-    fn from_lexemes(lexeme_data: &LexemeData) -> Self {
-        let mut bigram_data = Self::default();
+    fn from_lexemes(lexeme_data: &LexemeData, track_first_seen: bool) -> Self {
+        let mut bigram_data = Self {
+            bigrams_first_seen_order: track_first_seen.then(HashMap::new),
+            ..Self::default()
+        };
         for line_ix in 0..lexeme_data.corpus_length() {
             let root_items = lexeme_data.root_items_for_line(line_ix);
             for pair in root_items.windows(2) {
@@ -193,13 +197,49 @@ impl BigramData {
             .right_lex_freqs
             .entry(bigram.right.clone())
             .or_insert(0) += delta;
+        self.total_bigram_count += delta;
 
         let was_present = self.bigrams_to_freqs.contains_key(bigram);
         *self.bigrams_to_freqs.entry(bigram.clone()).or_insert(0) += delta;
         if delta > 0 && !was_present {
-            self.bigrams_first_seen_order
-                .insert(bigram.clone(), self.next_bigram_order);
-            self.next_bigram_order += 1;
+            if let Some(first_seen) = self.bigrams_first_seen_order.as_mut() {
+                first_seen.insert(bigram.clone(), self.next_bigram_order);
+                self.next_bigram_order += 1;
+            }
+        }
+    }
+
+    fn maybe_remove_bigram(&mut self, bigram: &Bigram) {
+        let should_remove = self
+            .bigrams_to_freqs
+            .get(bigram)
+            .map(|freq| *freq <= 0)
+            .unwrap_or(false);
+        if should_remove {
+            self.bigrams_to_freqs.remove(bigram);
+            if let Some(first_seen) = self.bigrams_first_seen_order.as_mut() {
+                first_seen.remove(bigram);
+            }
+        }
+    }
+
+    fn maybe_remove_lr_lexemes(&mut self, bigram: &Bigram) {
+        let remove_left = self
+            .left_lex_freqs
+            .get(&bigram.left)
+            .map(|freq| *freq <= 0)
+            .unwrap_or(false);
+        if remove_left {
+            self.left_lex_freqs.remove(&bigram.left);
+        }
+
+        let remove_right = self
+            .right_lex_freqs
+            .get(&bigram.right)
+            .map(|freq| *freq <= 0)
+            .unwrap_or(false);
+        if remove_right {
+            self.right_lex_freqs.remove(&bigram.right);
         }
     }
 }
@@ -374,14 +414,45 @@ fn merged_word_ids(bigram: &Bigram) -> SmallVec<[TokenId; 6]> {
     merged
 }
 
+fn root_items_from_old_with_merges(
+    old_root_items: &[(usize, Lexeme)],
+    starts: &[usize],
+    merged_lexeme: &Lexeme,
+    merged_width: usize,
+) -> Vec<(usize, Lexeme)> {
+    if starts.is_empty() {
+        return old_root_items.to_vec();
+    }
+
+    let start_set = starts.iter().copied().collect::<HashSet<_>>();
+    let mut new_root_items = Vec::with_capacity(old_root_items.len());
+
+    for (ix, lexeme) in old_root_items {
+        let insertion_ix = starts.partition_point(|s| *s <= *ix);
+        let in_merged_span = insertion_ix > 0 && *ix < starts[insertion_ix - 1] + merged_width;
+        if !in_merged_span {
+            new_root_items.push((*ix, lexeme.clone()));
+            continue;
+        }
+
+        if start_set.contains(ix) {
+            new_root_items.push((*ix, merged_lexeme.clone()));
+        }
+    }
+
+    new_root_items
+}
+
 fn select_candidate(
     tie_breaker: TieBreaker,
     method: SelectionMethod,
     bigrams_to_freqs: &HashMap<Bigram, i64>,
-    bigrams_first_seen_order: &HashMap<Bigram, usize>,
+    bigrams_first_seen_order: Option<&HashMap<Bigram, usize>>,
     candidate_scores: &HashMap<Bigram, CandidateScore>,
     min_count: i64,
 ) -> Option<(Bigram, CandidateScore)> {
+    let legacy = tie_breaker == TieBreaker::LegacyFirstSeen;
+
     if method == SelectionMethod::Frequency {
         let mut best: Option<(Bigram, CandidateScore)> = None;
         let mut best_key: Option<(Reverse<i64>, SmallVec<[TokenId; 6]>)> = None;
@@ -397,20 +468,27 @@ fn select_candidate(
                 score,
                 frequency: *freq,
             };
-            let order = *bigrams_first_seen_order.get(bigram).unwrap_or(&usize::MAX);
+            let order = if legacy {
+                bigrams_first_seen_order
+                    .and_then(|m| m.get(bigram))
+                    .copied()
+                    .unwrap_or(usize::MAX)
+            } else {
+                usize::MAX
+            };
 
             if best.is_none() || score > best_score {
                 best_score = score;
                 best_order = order;
                 best = Some((bigram.clone(), candidate.clone()));
-                if tie_breaker == TieBreaker::Deterministic {
+                if !legacy {
                     best_key = Some((Reverse(*freq), merged_word_ids(bigram)));
                 }
                 continue;
             }
 
             if scores_close(score, best_score) {
-                if tie_breaker == TieBreaker::LegacyFirstSeen {
+                if legacy {
                     if order < best_order {
                         best_order = order;
                         best = Some((bigram.clone(), candidate));
@@ -440,20 +518,27 @@ fn select_candidate(
     let mut best_order = usize::MAX;
 
     for (bigram, candidate) in candidate_scores {
-        let order = *bigrams_first_seen_order.get(bigram).unwrap_or(&usize::MAX);
+        let order = if legacy {
+            bigrams_first_seen_order
+                .and_then(|m| m.get(bigram))
+                .copied()
+                .unwrap_or(usize::MAX)
+        } else {
+            usize::MAX
+        };
 
         if best.is_none() || candidate.score > best_score {
             best_score = candidate.score;
             best_order = order;
             best = Some((bigram.clone(), candidate.clone()));
-            if tie_breaker == TieBreaker::Deterministic {
+            if !legacy {
                 best_key = Some((Reverse(candidate.frequency), merged_word_ids(bigram)));
             }
             continue;
         }
 
         if scores_close(candidate.score, best_score) {
-            if tie_breaker == TieBreaker::LegacyFirstSeen {
+            if legacy {
                 if order < best_order {
                     best_order = order;
                     best = Some((bigram.clone(), candidate.clone()));
@@ -480,14 +565,14 @@ fn merge_winner(
     bigram_data: &mut BigramData,
 ) -> HashSet<Bigram> {
     let mut bigram_lines = HashSet::new();
-    for (line_ix, _) in clean_locations {
+    let mut merge_starts_by_line: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (line_ix, word_ix) in clean_locations {
         bigram_lines.insert(*line_ix);
+        merge_starts_by_line
+            .entry(*line_ix)
+            .or_default()
+            .push(*word_ix);
     }
-
-    let mut touched_lexemes = HashSet::new();
-    touched_lexemes.insert(winner.merged_lexeme.clone());
-    touched_lexemes.insert(winner.bigram.left.clone());
-    touched_lexemes.insert(winner.bigram.right.clone());
 
     let mut touched_bigrams = HashSet::new();
     touched_bigrams.insert(winner.bigram.clone());
@@ -501,7 +586,6 @@ fn merge_winner(
         for lexeme_index in 0..winner.n_lexemes() {
             let pos = word_ix + lexeme_index;
             let old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos].clone();
-            touched_lexemes.insert(old_lexeme.clone());
 
             let lexeme = Lexeme {
                 word: winner.merged_lexeme.word.clone(),
@@ -511,6 +595,9 @@ fn merge_winner(
 
             if let Some(locations) = lexeme_data.lexemes_to_locations.get_mut(&old_lexeme) {
                 locations.remove(&(line_ix, pos));
+                if locations.is_empty() {
+                    lexeme_data.lexemes_to_locations.remove(&old_lexeme);
+                }
             }
             lexeme_data
                 .lexemes_to_locations
@@ -521,6 +608,10 @@ fn merge_winner(
     }
 
     for (line_ix, old_root_items) in old_bigrams_lookup {
+        let line_merge_starts = merge_starts_by_line
+            .get(&line_ix)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         let old_bigrams = old_root_items
             .windows(2)
             .map(|pair| {
@@ -534,7 +625,12 @@ fn merge_winner(
             })
             .collect::<Vec<_>>();
 
-        let new_root_items = lexeme_data.root_items_for_line(line_ix);
+        let new_root_items = root_items_from_old_with_merges(
+            &old_root_items,
+            line_merge_starts,
+            &winner.merged_lexeme,
+            winner.n_lexemes(),
+        );
         let new_bigrams = new_root_items
             .windows(2)
             .map(|pair| {
@@ -557,14 +653,21 @@ fn merge_winner(
 
         for (bigram, _) in &new_bigrams {
             bigram_data.add_bigram(bigram, 1);
+            bigram_data.maybe_remove_bigram(bigram);
+            bigram_data.maybe_remove_lr_lexemes(bigram);
         }
         for (bigram, _) in &old_bigrams {
             bigram_data.add_bigram(bigram, -1);
+            bigram_data.maybe_remove_bigram(bigram);
+            bigram_data.maybe_remove_lr_lexemes(bigram);
         }
 
         for (bigram, location) in old_bigrams {
             if let Some(locations) = bigram_data.bigrams_to_locations.get_mut(&bigram) {
                 locations.remove(&location);
+                if locations.is_empty() {
+                    bigram_data.bigrams_to_locations.remove(&bigram);
+                }
             }
         }
         for (bigram, location) in new_bigrams {
@@ -583,73 +686,14 @@ fn merge_winner(
 
     if let Some(el1_freq) = lexeme_data.lexemes_to_freqs.get_mut(&winner.bigram.left) {
         *el1_freq -= merge_token_count;
+        if *el1_freq <= 0 {
+            lexeme_data.lexemes_to_freqs.remove(&winner.bigram.left);
+        }
     }
     if let Some(el2_freq) = lexeme_data.lexemes_to_freqs.get_mut(&winner.bigram.right) {
         *el2_freq -= merge_token_count;
-    }
-
-    for lexeme in touched_lexemes {
-        let remove_freq = lexeme_data
-            .lexemes_to_freqs
-            .get(&lexeme)
-            .map(|freq| *freq <= 0)
-            .unwrap_or(false);
-        if remove_freq {
-            lexeme_data.lexemes_to_freqs.remove(&lexeme);
-        }
-
-        let remove_locations = lexeme_data
-            .lexemes_to_locations
-            .get(&lexeme)
-            .map(|locations| locations.is_empty())
-            .unwrap_or(true);
-        if remove_locations {
-            lexeme_data.lexemes_to_locations.remove(&lexeme);
-        }
-    }
-
-    let mut touched_lr_lexemes = HashSet::new();
-    for bigram in &touched_bigrams {
-        touched_lr_lexemes.insert(bigram.left.clone());
-        touched_lr_lexemes.insert(bigram.right.clone());
-
-        let remove_freq = bigram_data
-            .bigrams_to_freqs
-            .get(bigram)
-            .map(|freq| *freq <= 0)
-            .unwrap_or(false);
-        if remove_freq {
-            bigram_data.bigrams_to_freqs.remove(bigram);
-            bigram_data.bigrams_first_seen_order.remove(bigram);
-        }
-
-        let remove_locations = bigram_data
-            .bigrams_to_locations
-            .get(bigram)
-            .map(|locations| locations.is_empty())
-            .unwrap_or(true);
-        if remove_locations {
-            bigram_data.bigrams_to_locations.remove(bigram);
-        }
-    }
-
-    for lexeme in touched_lr_lexemes {
-        let remove_left = bigram_data
-            .left_lex_freqs
-            .get(&lexeme)
-            .map(|freq| *freq <= 0)
-            .unwrap_or(false);
-        if remove_left {
-            bigram_data.left_lex_freqs.remove(&lexeme);
-        }
-
-        let remove_right = bigram_data
-            .right_lex_freqs
-            .get(&lexeme)
-            .map(|freq| *freq <= 0)
-            .unwrap_or(false);
-        if remove_right {
-            bigram_data.right_lex_freqs.remove(&lexeme);
+        if *el2_freq <= 0 {
+            lexeme_data.lexemes_to_freqs.remove(&winner.bigram.right);
         }
     }
 
@@ -680,7 +724,7 @@ impl Engine {
             || self.candidate_scores.is_empty()
             || self.iteration_counter % FULL_RESCORE_INTERVAL == 0;
 
-        let total_bigram_count = self.bigrams.bigrams_to_freqs.values().sum::<i64>();
+        let total_bigram_count = self.bigrams.total_bigram_count;
 
         if full {
             let snapshot = self
@@ -809,7 +853,7 @@ impl Engine {
             self.tie_breaker,
             self.method,
             &self.bigrams.bigrams_to_freqs,
-            &self.bigrams.bigrams_first_seen_order,
+            self.bigrams.bigrams_first_seen_order.as_ref(),
             &self.candidate_scores,
             self.min_count,
         ) else {
@@ -824,11 +868,14 @@ impl Engine {
 
         let winner = WinnerInfo::from_bigram_with_data(&bigram, &self.bigrams);
         let clean_locations = winner.cleaned_bigram_locations();
-        let line_hits_count = clean_locations
-            .iter()
-            .map(|(line_ix, _)| *line_ix)
-            .collect::<HashSet<_>>()
-            .len();
+        let line_hits_count = if clean_locations.is_empty() {
+            0
+        } else {
+            1 + clean_locations
+                .windows(2)
+                .filter(|pair| pair[0].0 != pair[1].0)
+                .count()
+        };
 
         let touched = merge_winner(
             &winner,
@@ -941,7 +988,8 @@ impl Engine {
             .collect::<Vec<_>>();
 
         let lexemes = LexemeData::from_corpus(&corpus_ids);
-        let bigrams = BigramData::from_lexemes(&lexemes);
+        let track_first_seen = tie_breaker == TieBreaker::LegacyFirstSeen;
+        let bigrams = BigramData::from_lexemes(&lexemes, track_first_seen);
 
         Ok(Self {
             interner,
@@ -998,7 +1046,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let lexemes = LexemeData::from_corpus(&corpus_ids);
-        let bigrams = BigramData::from_lexemes(&lexemes);
+        let bigrams = BigramData::from_lexemes(&lexemes, false);
 
         Engine {
             interner,
