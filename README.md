@@ -22,9 +22,9 @@ The code was originally derived from an existing implementation from the origina
 import remerge
 
 corpus = [
-    ["a", "list", "of", "already", "tokenized", "texts"],
-    ["where", "each", "item", "is", "a", "list", "of", "tokens"],
-    ["isn't", "a", "list", "nice"]
+    "a list of already tokenized texts",
+    "where each item is a document string",
+    "isn't this API nice"
 ]
 
 winners = remerge.run(
@@ -45,10 +45,13 @@ winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_coun
 
 | Argument     | Type                           | Description                                                                                                                                                                                                                                                                                     |
 | ------------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| corpus       | `List[List[str]]`              | A corpus of already tokenized texts.                                                                                                                                                                                                                                                            |
+| corpus       | `List[str]`                    | A corpus of document strings. Documents are split into segments according to `splitter`, then each segment is tokenized with whitespace splitting in Rust.                                                                                                                                      |
 | iterations   | `int`                          | The maximum number of iterations to run the algorithm. Papers typically use >500.                                                                                                                                                                                                               |
 | method       | `SelectionMethod`, optional    | One of "frequency", "log_likelihood", or "npmi". Defaults to "log_likelihood".                                                                                                                                                                                                                  |
 | min_count    | `int`, optional                | The minimum count required for a bigram to be included in winner calculations for all methods. If choosing NPMI ("npmi"), prefer using min_count because this measure is biased towards infrequent word pairs. Defaults to 0.                                                               |
+| splitter     | `Splitter`, optional           | Segmenter used before tokenization: `"delimiter"` (default) or `"sentencex"`.                                                                                                                                                                                                                    |
+| line_delimiter | `Optional[str]`, optional    | Delimiter used when `splitter="delimiter"`. Defaults to `\"\\n\"`. Set to `None` to treat each document as a single segment. Ignored when `splitter="sentencex"`.                                                                                                                           |
+| sentencex_language | `str`, optional          | Language code passed to `sentencex` when `splitter="sentencex"` (for example `"en"`). Defaults to `"en"`.                                                                                                                                                                                      |
 | output       | `Optional[Path]`, optional     | A file path to output the winning merged lexemes as JSON. Defaults to None.                                                                                                                                                                                                                     |
 | progress_bar | `ProgressBarOptions`, optional | Verbosity of progress bar. "all" will display the lexeme and bigram construction progress each iteration plus total iteration progress. "iterations" will display progress on total iterations. "none" has no output. Defaults to "iterations".                                             |
 | tie_breaker  | `TieBreaker`, optional         | How ties are resolved among equal-scoring candidates. "deterministic" ranks by score, then frequency, then lexicographic merged token order. "legacy_first_seen" uses prior first-seen behavior. Defaults to "deterministic".                                                             |
@@ -72,6 +75,7 @@ pip install git+https://github.com/pmbaumgartner/remerge-mwe.git
 #### Development
 
 Use [`uv`](https://github.com/astral-sh/uv) for local project and dependency management.
+This package now builds a Rust extension via PyO3 + maturin, so a local Rust toolchain is required.
 
 Create/sync the environment with all dependency groups:
 
@@ -79,10 +83,22 @@ Create/sync the environment with all dependency groups:
 uv sync --all-groups
 ```
 
+Build/install the extension for the current environment:
+
+```bash
+uv run --no-sync maturin develop
+```
+
 Run tests:
 
 ```bash
-uv run pytest -v
+uv run --no-sync pytest -v -m "not corpus and not parity"
+```
+
+Run full corpus/parity checks (slower, intended for CI/mainline validation):
+
+```bash
+uv run --no-sync pytest -v -m "corpus or parity"
 ```
 
 Add a runtime dependency:
@@ -96,6 +112,72 @@ Add a development dependency:
 ```bash
 uv add --dev <pkg>
 ```
+
+If you make changes under `rust/`, run `uv run --no-sync maturin develop` again before testing.
+
+PyO3 troubleshooting:
+
+```bash
+# Print PyO3 interpreter/build config and stop.
+PYO3_PRINT_CONFIG=1 uv run --no-sync maturin develop
+
+# Force the Python interpreter PyO3 should inspect.
+PYO3_PYTHON=.venv/bin/python uv run --no-sync maturin develop
+```
+
+If `cargo test` fails with unresolved Python symbols, confirm `pyo3/extension-module`
+is not forced in `Cargo.toml`, then run:
+
+```bash
+cargo clean
+cargo test
+```
+
+#### Releasing
+
+Releases are automated with GitHub Actions in
+`.github/workflows/release.yml`.
+
+1. Update both version fields to the same value:
+   - `pyproject.toml` -> `[project].version`
+   - `Cargo.toml` -> `[package].version`
+2. Commit and push to `main`.
+3. Create and push a release tag matching that version:
+
+```bash
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+4. Verify the `Release` workflow completes successfully:
+   - wheels built for Linux/macOS/Windows
+   - sdist built
+   - smoke test + `twine check` pass
+   - publish job succeeds
+5. Confirm artifacts on PyPI:
+   - https://pypi.org/project/remerge-mwe/
+
+Manual dry-run/backfill:
+- Trigger `Release` via `workflow_dispatch`.
+- Leave `publish=false` for build/validation only.
+- Set `publish=true` and `release_tag=vX.Y.Z` only when you intend to upload.
+
+Trusted Publisher (PyPI OIDC) setup:
+1. In PyPI project settings for `remerge-mwe`, add a Trusted Publisher.
+2. Set owner/repo to this GitHub repository.
+3. Set workflow file to `release.yml`.
+4. If using GitHub environments, set environment to `pypi`.
+5. In GitHub, optionally add protection rules/required reviewers for the `pypi` environment.
+
+#### Rust/PyO3 Backlog
+
+Planned follow-up after stabilization: split into a pure Rust core crate plus a thin
+PyO3 bindings crate.
+
+Trigger for this split:
+1. Parity tests remain stable across 2 consecutive PRs.
+2. CI remains green across 2 consecutive PRs.
+3. Benchmark baseline from `bin/benchmark-remerge.sh --build release --runs 1 --iterations 5` is stable across 2 consecutive PRs.
 
 #### How it works
 
