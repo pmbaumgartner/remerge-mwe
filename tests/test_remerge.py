@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 from remerge import __version__, run
-from remerge.core import Lexeme, NoCandidateBigramError, SelectionMethod
+from remerge.core import Lexeme, NoCandidateBigramError, SelectionMethod, Splitter
 
 
 def _summarize_winners(winners):
@@ -217,6 +217,84 @@ def test_min_score_stops_or_raises():
 
     with pytest.raises(NoCandidateBigramError):
         run(corpus, 2, min_score=1e9, on_exhausted="raise", progress_bar="none")
+
+
+@pytest.mark.fast
+def test_sentencex_splitter_breaks_cross_sentence_bigrams():
+    corpus = ["hi! bye! hi! bye!"]
+
+    baseline = run(
+        corpus,
+        1,
+        method="frequency",
+        splitter=Splitter.delimiter,
+        line_delimiter=None,
+        progress_bar="none",
+    )
+    assert baseline[0].merged_lexeme.word == ("hi!", "bye!")
+
+    sentencex = run(
+        corpus,
+        1,
+        method="frequency",
+        splitter=Splitter.sentencex,
+        sentencex_language="en",
+        progress_bar="none",
+    )
+    assert sentencex == []
+
+
+@pytest.mark.fast
+def test_invalid_splitter_raises():
+    with pytest.raises(ValueError):
+        run(["a b"], 1, splitter="not-a-splitter", progress_bar="none")
+
+
+@pytest.mark.fast
+def test_sentencex_defaults_to_en_language():
+    corpus = ["hi! bye! hi! bye!"]
+
+    implicit_en = run(
+        corpus,
+        1,
+        method="frequency",
+        splitter=Splitter.sentencex,
+        progress_bar="none",
+    )
+    explicit_en = run(
+        corpus,
+        1,
+        method="frequency",
+        splitter=Splitter.sentencex,
+        sentencex_language="en",
+        progress_bar="none",
+    )
+
+    assert implicit_en == explicit_en == []
+
+
+@pytest.mark.fast
+def test_sentencex_ignores_line_delimiter():
+    corpus = ["hi! bye! hi! bye!"]
+
+    with_none = run(
+        corpus,
+        1,
+        method="frequency",
+        splitter=Splitter.sentencex,
+        line_delimiter=None,
+        progress_bar="none",
+    )
+    with_custom = run(
+        corpus,
+        1,
+        method="frequency",
+        splitter=Splitter.sentencex,
+        line_delimiter="__this_delimiter_is_ignored__",
+        progress_bar="none",
+    )
+
+    assert with_none == with_custom == []
 
 
 @pytest.mark.parity

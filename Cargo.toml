@@ -16,4 +16,5 @@ python-extension = ["pyo3/extension-module"]
 indexmap = "2.12"
 pyo3 = { version = "0.23.5", features = ["abi3-py312"] }
 rayon = "1.10"
+sentencex = "0.1.13"
 smallvec = "1.13"

@@ -1,6 +1,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use sentencex::segment;
 use smallvec::{smallvec, SmallVec};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -51,6 +52,37 @@ impl TieBreaker {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Splitter<'a> {
+    Delimiter(Option<&'a str>),
+    Sentencex { language: &'a str },
+}
+
+impl<'a> Splitter<'a> {
+    fn parse(
+        splitter: &'a str,
+        line_delimiter: Option<&'a str>,
+        sentencex_language: &'a str,
+    ) -> PyResult<Self> {
+        match splitter {
+            "delimiter" => Ok(Self::Delimiter(line_delimiter)),
+            "sentencex" => {
+                if sentencex_language.trim().is_empty() {
+                    return Err(PyValueError::new_err(
+                        "sentencex_language must be a non-empty language code.",
+                    ));
+                }
+                Ok(Self::Sentencex {
+                    language: sentencex_language,
+                })
+            }
+            _ => Err(PyValueError::new_err(format!(
+                "Invalid splitter {splitter:?}. Expected one of: 'delimiter', 'sentencex'."
+            ))),
+        }
+    }
+}
+
 #[derive(Default)]
 struct Interner {
     str_to_id: HashMap<String, TokenId>,
@@ -58,23 +90,27 @@ struct Interner {
 }
 
 impl Interner {
-    fn from_documents(
-        documents: &[String],
-        line_delimiter: Option<&str>,
-    ) -> (Self, Vec<Vec<TokenId>>) {
+    fn from_documents(documents: &[String], splitter: Splitter<'_>) -> (Self, Vec<Vec<TokenId>>) {
         let mut uniq = HashSet::new();
         for document in documents {
-            match line_delimiter {
-                Some(delim) => {
+            match splitter {
+                Splitter::Delimiter(Some(delim)) => {
                     for segment in document.split(delim) {
                         for token in segment.split_whitespace() {
                             uniq.insert(token.to_string());
                         }
                     }
                 }
-                None => {
+                Splitter::Delimiter(None) => {
                     for token in document.split_whitespace() {
                         uniq.insert(token.to_string());
+                    }
+                }
+                Splitter::Sentencex { language } => {
+                    for sentence in segment(language, document) {
+                        for token in sentence.split_whitespace() {
+                            uniq.insert(token.to_string());
+                        }
                     }
                 }
             }
@@ -91,8 +127,8 @@ impl Interner {
 
         let mut corpus_ids = Vec::new();
         for document in documents {
-            match line_delimiter {
-                Some(delim) => {
+            match splitter {
+                Splitter::Delimiter(Some(delim)) => {
                     for segment in document.split(delim) {
                         let tokens = segment
                             .split_whitespace()
@@ -103,13 +139,24 @@ impl Interner {
                         }
                     }
                 }
-                None => {
+                Splitter::Delimiter(None) => {
                     let tokens = document
                         .split_whitespace()
                         .map(|token| interner.id_for(token))
                         .collect::<Vec<_>>();
                     if !tokens.is_empty() {
                         corpus_ids.push(tokens);
+                    }
+                }
+                Splitter::Sentencex { language } => {
+                    for sentence in segment(language, document) {
+                        let tokens = sentence
+                            .split_whitespace()
+                            .map(|token| interner.id_for(token))
+                            .collect::<Vec<_>>();
+                        if !tokens.is_empty() {
+                            corpus_ids.push(tokens);
+                        }
                     }
                 }
             }
@@ -1010,17 +1057,28 @@ type RunOutcome = (
 #[pymethods]
 impl Engine {
     #[new]
-    #[pyo3(signature = (corpus, method, min_count, tie_breaker, line_delimiter=None))]
+    #[pyo3(signature = (
+        corpus,
+        method,
+        min_count,
+        tie_breaker,
+        splitter="delimiter",
+        line_delimiter=None,
+        sentencex_language="en"
+    ))]
     fn new(
         corpus: Vec<String>,
         method: &str,
         min_count: usize,
         tie_breaker: &str,
+        splitter: &str,
         line_delimiter: Option<&str>,
+        sentencex_language: &str,
     ) -> PyResult<Self> {
         let method = SelectionMethod::parse(method)?;
         let tie_breaker = TieBreaker::parse(tie_breaker)?;
-        let (interner, corpus_ids) = Interner::from_documents(&corpus, line_delimiter);
+        let splitter = Splitter::parse(splitter, line_delimiter, sentencex_language)?;
+        let (interner, corpus_ids) = Interner::from_documents(&corpus, splitter);
 
         let lexemes = LexemeData::from_corpus(&corpus_ids);
         let track_first_seen = tie_breaker == TieBreaker::LegacyFirstSeen;
@@ -1068,7 +1126,8 @@ mod tests {
     fn build_engine(corpus: Vec<&str>, method: SelectionMethod, min_count: i64) -> Engine {
         let corpus = corpus.into_iter().map(str::to_string).collect::<Vec<_>>();
 
-        let (interner, corpus_ids) = Interner::from_documents(&corpus, Some("\n"));
+        let (interner, corpus_ids) =
+            Interner::from_documents(&corpus, Splitter::Delimiter(Some("\n")));
         let lexemes = LexemeData::from_corpus(&corpus_ids);
         let bigrams = BigramData::from_lexemes(&lexemes, false);
 
@@ -1088,7 +1147,8 @@ mod tests {
     #[test]
     fn interner_roundtrip() {
         let corpus = vec!["b a b".to_string()];
-        let (interner, corpus_ids) = Interner::from_documents(&corpus, Some("\n"));
+        let (interner, corpus_ids) =
+            Interner::from_documents(&corpus, Splitter::Delimiter(Some("\n")));
         let ids = vec![interner.id_for("a"), interner.id_for("b")];
         assert_eq!(interner.ids_to_strings(&ids), vec!["a", "b"]);
         assert!(interner.id_for("a") < interner.id_for("b"));

@@ -21,7 +21,9 @@ class Engine:
         method: str,
         min_count: int,
         tie_breaker: str,
+        splitter: str = "delimiter",
         line_delimiter: str | None = None,
+        sentencex_language: str = "en",
     ) -> None: ...
     def corpus_length(self) -> int: ...
     def run(

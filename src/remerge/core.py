@@ -22,6 +22,11 @@ class TieBreaker(str, Enum):
     legacy_first_seen = "legacy_first_seen"
 
 
+class Splitter(str, Enum):
+    delimiter = "delimiter"
+    sentencex = "sentencex"
+
+
 class ExhaustionPolicy(str, Enum):
     stop = "stop"
     raise_ = "raise"
@@ -140,7 +145,9 @@ def run(
     *,
     method: SelectionMethod | str = SelectionMethod.log_likelihood,
     min_count: int = 0,
+    splitter: Splitter | str = Splitter.delimiter,
     line_delimiter: str | None = "\n",
+    sentencex_language: str = "en",
     output: Path | None = None,
     output_debug_each_iteration: bool = False,
     progress_bar: ProgressBarOptions = "iterations",
@@ -150,10 +157,19 @@ def run(
 ) -> list[WinnerInfo]:
     """Run the remerge algorithm."""
     method = _coerce_enum(method, SelectionMethod, "method")
+    splitter = _coerce_enum(splitter, Splitter, "splitter")
     tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
     on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
-    engine = Engine(corpus, method.value, min_count, tie_breaker.value, line_delimiter)
+    engine = Engine(
+        corpus,
+        method.value,
+        min_count,
+        tie_breaker.value,
+        splitter.value,
+        line_delimiter,
+        sentencex_language,
+    )
 
     if output is not None:
         print(f"Outputting winning merged lexemes to '{output}'")
