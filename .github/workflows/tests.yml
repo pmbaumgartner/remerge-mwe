@@ -32,7 +32,7 @@ jobs:
           . .wheel-smoke/bin/activate
           pip install --upgrade pip
           pip install dist/remerge_mwe-*.whl
-          python -c "import remerge; assert callable(remerge.run); assert remerge.run([['a','b']], 1, method='frequency', progress_bar='none')[0].merged_lexeme.word == ('a', 'b')"
+          python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency', progress_bar='none')[0].merged_lexeme.word == ('a', 'b')"
       - run: uv run --no-sync pytest -v -m "not corpus and not parity"
 
   full-corpus:

@@ -17,10 +17,11 @@ RunOutcome = tuple[str, list[StepPayload], Optional[float], int, list[ProgressPa
 class Engine:
     def __init__(
         self,
-        corpus: list[list[str]],
+        corpus: list[str],
         method: str,
         min_count: int,
         tie_breaker: str,
+        line_delimiter: str | None = None,
     ) -> None: ...
     def corpus_length(self) -> int: ...
     def run(

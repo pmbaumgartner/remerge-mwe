@@ -135,11 +135,12 @@ def _winner_from_payload(payload: StepPayload) -> tuple[WinnerInfo, float]:
 
 
 def run(
-    corpus: list[list[str]],
+    corpus: list[str],
     iterations: int,
     *,
     method: SelectionMethod | str = SelectionMethod.log_likelihood,
     min_count: int = 0,
+    line_delimiter: str | None = "\n",
     output: Path | None = None,
     output_debug_each_iteration: bool = False,
     progress_bar: ProgressBarOptions = "iterations",
@@ -152,7 +153,7 @@ def run(
     tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
     on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
-    engine = Engine(corpus, method.value, min_count, tie_breaker.value)
+    engine = Engine(corpus, method.value, min_count, tie_breaker.value, line_delimiter)
 
     if output is not None:
         print(f"Outputting winning merged lexemes to '{output}'")

@@ -22,9 +22,9 @@ The code was originally derived from an existing implementation from the origina
 import remerge
 
 corpus = [
-    ["a", "list", "of", "already", "tokenized", "texts"],
-    ["where", "each", "item", "is", "a", "list", "of", "tokens"],
-    ["isn't", "a", "list", "nice"]
+    "a list of already tokenized texts",
+    "where each item is a document string",
+    "isn't this API nice"
 ]
 
 winners = remerge.run(
@@ -45,10 +45,11 @@ winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_coun
 
 | Argument     | Type                           | Description                                                                                                                                                                                                                                                                                     |
 | ------------ | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| corpus       | `List[List[str]]`              | A corpus of already tokenized texts.                                                                                                                                                                                                                                                            |
+| corpus       | `List[str]`                    | A corpus of document strings. Documents are split into lines using `line_delimiter`, then each line is tokenized with whitespace splitting in Rust.                                                                                                                                           |
 | iterations   | `int`                          | The maximum number of iterations to run the algorithm. Papers typically use >500.                                                                                                                                                                                                               |
 | method       | `SelectionMethod`, optional    | One of "frequency", "log_likelihood", or "npmi". Defaults to "log_likelihood".                                                                                                                                                                                                                  |
 | min_count    | `int`, optional                | The minimum count required for a bigram to be included in winner calculations for all methods. If choosing NPMI ("npmi"), prefer using min_count because this measure is biased towards infrequent word pairs. Defaults to 0.                                                               |
+| line_delimiter | `Optional[str]`, optional    | Delimiter used to split each document into lines before tokenization. Defaults to `\"\\n\"`. Set to `None` to treat each document as a single line.                                                                                                                                             |
 | output       | `Optional[Path]`, optional     | A file path to output the winning merged lexemes as JSON. Defaults to None.                                                                                                                                                                                                                     |
 | progress_bar | `ProgressBarOptions`, optional | Verbosity of progress bar. "all" will display the lexeme and bigram construction progress each iteration plus total iteration progress. "iterations" will display progress on total iterations. "none" has no output. Defaults to "iterations".                                             |
 | tie_breaker  | `TieBreaker`, optional         | How ties are resolved among equal-scoring candidates. "deterministic" ranks by score, then frequency, then lexicographic merged token order. "legacy_first_seen" uses prior first-seen behavior. Defaults to "deterministic".                                                             |

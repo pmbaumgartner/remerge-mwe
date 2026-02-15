@@ -28,7 +28,7 @@ def test_sample_corpus_single_iter(sample_corpus):
 
 @pytest.mark.fast
 def test_winner_shape():
-    winners = run([["a", "b", "c"]], 1, method="frequency", progress_bar="none")
+    winners = run(["a b c"], 1, method="frequency", progress_bar="none")
     winner = winners[0]
     assert winner.bigram[0] == Lexeme(("a",), 0)
     assert winner.bigram[1] == Lexeme(("b",), 0)
@@ -40,7 +40,7 @@ def test_winner_shape():
 @pytest.mark.fast
 def test_consecutive_single():
     """Ensure greedy bigram merge avoids overlapping middle bigram."""
-    corpus = [["a", "a", "a", "a"]]
+    corpus = ["a a a a"]
     winners = run(corpus, 2, progress_bar="none")
     assert winners[0].merge_token_count == 2
     assert winners[1].merged_lexeme == Lexeme(("a", "a", "a", "a"), 0)
@@ -49,7 +49,7 @@ def test_consecutive_single():
 @pytest.mark.fast
 def test_consecutive_remainder():
     """Ensure greedy bigram merge avoids overlapping trailing bigram."""
-    corpus = [["c", "a", "b", "a", "b", "a", "b", "d"]]
+    corpus = ["c a b a b a b d"]
     winners = run(corpus, 2, method="frequency", progress_bar="none")
     assert winners[0].merge_token_count == 3
     assert winners[1].merge_token_count == 1
@@ -58,7 +58,7 @@ def test_consecutive_remainder():
 @pytest.mark.fast
 @pytest.mark.parametrize("progress_bar", ["all", "iterations", "none"])
 def test_progress_bar(progress_bar):
-    corpus = [["a", "b", "a", "b", "c"], ["a", "b", "d", "e"]]
+    corpus = ["a b a b c", "a b d e"]
     winners = run(corpus, 2, progress_bar=progress_bar)
     assert len(winners) == 2
 
@@ -74,7 +74,7 @@ def test_progress_bar(progress_bar):
     ],
 )
 def test_methods(method, min_count):
-    corpus = [["a", "b", "a", "b", "c"], ["a", "b", "d", "e"]]
+    corpus = ["a b a b c", "a b d e"]
     winners = run(corpus, 2, method=method, min_count=min_count, progress_bar="none")
     assert len(winners) == 2
 
@@ -82,7 +82,7 @@ def test_methods(method, min_count):
 @pytest.mark.fast
 def test_output(tmp_path):
     output = tmp_path / "tmp.json"
-    winners = run([["a", "b", "a", "b"]], 1, output=output, progress_bar="none")
+    winners = run(["a b a b"], 1, output=output, progress_bar="none")
     results = json.loads(output.read_text())
     assert tuple(results["0"]) == winners[0].merged_lexeme.word
 
@@ -90,7 +90,7 @@ def test_output(tmp_path):
 @pytest.mark.fast
 def test_output_writes_once_by_default(monkeypatch, tmp_path):
     output = tmp_path / "tmp.json"
-    corpus = [["a", "a", "a", "a"]]
+    corpus = ["a a a a"]
     writes = []
     original_write_text = Path.write_text
 
@@ -113,7 +113,7 @@ def test_output_debug_writes_each_iteration_with_cumulative_content(
     monkeypatch, tmp_path
 ):
     output = tmp_path / "tmp.json"
-    corpus = [["a", "a", "a", "a"]]
+    corpus = ["a a a a"]
     writes = []
     original_write_text = Path.write_text
 
@@ -143,24 +143,24 @@ def test_output_debug_writes_each_iteration_with_cumulative_content(
 @pytest.mark.fast
 def test_empty_or_single_token_corpus_stops_cleanly():
     assert run([], 1, progress_bar="none") == []
-    assert run([["a"]], 5, progress_bar="none") == []
+    assert run(["a"], 5, progress_bar="none") == []
 
 
 @pytest.mark.fast
 def test_exhausted_policy_raise():
     with pytest.raises(NoCandidateBigramError):
-        run([["a"]], 1, on_exhausted="raise", progress_bar="none")
+        run(["a"], 1, on_exhausted="raise", progress_bar="none")
 
 
 @pytest.mark.fast
 def test_iterations_larger_than_available_merges_stop():
-    winners = run([["a", "b", "c"]], 99, progress_bar="none")
+    winners = run(["a b c"], 99, progress_bar="none")
     assert len(winners) == 2
 
 
 @pytest.mark.fast
 def test_frequency_respects_min_count():
-    corpus = [["a", "b"], ["a", "c"]]
+    corpus = ["a b", "a c"]
     winners = run(
         corpus,
         1,
@@ -175,8 +175,8 @@ def test_frequency_respects_min_count():
 @pytest.mark.fast
 @pytest.mark.parametrize("method", ["frequency", "log_likelihood", "npmi"])
 def test_deterministic_tie_breaking_is_order_independent(method):
-    corpus_a = [["a", "b"], ["c", "d"]]
-    corpus_b = [["c", "d"], ["a", "b"]]
+    corpus_a = ["a b", "c d"]
+    corpus_b = ["c d", "a b"]
 
     winner_a = run(corpus_a, 1, method=method, progress_bar="none")[
         0
@@ -189,8 +189,8 @@ def test_deterministic_tie_breaking_is_order_independent(method):
 
 @pytest.mark.fast
 def test_legacy_tie_breaking_keeps_first_seen_behavior():
-    corpus_a = [["a", "b"], ["c", "d"]]
-    corpus_b = [["c", "d"], ["a", "b"]]
+    corpus_a = ["a b", "c d"]
+    corpus_b = ["c d", "a b"]
 
     winner_a = run(
         corpus_a,
@@ -212,7 +212,7 @@ def test_legacy_tie_breaking_keeps_first_seen_behavior():
 
 @pytest.mark.fast
 def test_min_score_stops_or_raises():
-    corpus = [["a", "b", "c"]]
+    corpus = ["a b c"]
     assert run(corpus, 2, min_score=1e9, on_exhausted="stop", progress_bar="none") == []
 
     with pytest.raises(NoCandidateBigramError):
@@ -233,7 +233,7 @@ def test_parity_fixture(sample_corpus):
     assert _summarize_winners(freq) == parity["frequency"]
     assert _summarize_winners(npmi) == parity["npmi"]
 
-    tie_corpus = [["a", "b"], ["c", "d"]]
+    tie_corpus = ["a b", "c d"]
     for method, expected in parity["tie_deterministic"].items():
         winner = run(tie_corpus, 1, method=method, progress_bar="none")[0]
         assert list(winner.merged_lexeme.word) == expected

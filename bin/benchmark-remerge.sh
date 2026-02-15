@@ -63,13 +63,11 @@ runs = int(${RUNS})
 iterations = int(${ITERATIONS})
 
 
-def load_sample_corpus() -> list[list[str]]:
-    corpus: list[list[str]] = []
+def load_sample_corpus() -> list[str]:
+    corpus: list[str] = []
     root = Path("tests/sample_corpus")
     for txt in sorted(root.glob("*.TXT")):
-        for line in txt.read_text().split("\n"):
-            if line:
-                corpus.append(line.split(" "))
+        corpus.append(txt.read_text())
     return corpus
 
 corpus = load_sample_corpus()

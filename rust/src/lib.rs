@@ -58,11 +58,25 @@ struct Interner {
 }
 
 impl Interner {
-    fn from_corpus(corpus: &[Vec<String>]) -> Self {
+    fn from_documents(
+        documents: &[String],
+        line_delimiter: Option<&str>,
+    ) -> (Self, Vec<Vec<TokenId>>) {
         let mut uniq = HashSet::new();
-        for line in corpus {
-            for token in line {
-                uniq.insert(token.clone());
+        for document in documents {
+            match line_delimiter {
+                Some(delim) => {
+                    for segment in document.split(delim) {
+                        for token in segment.split_whitespace() {
+                            uniq.insert(token.to_string());
+                        }
+                    }
+                }
+                None => {
+                    for token in document.split_whitespace() {
+                        uniq.insert(token.to_string());
+                    }
+                }
             }
         }
         let mut sorted = uniq.into_iter().collect::<Vec<_>>();
@@ -74,7 +88,34 @@ impl Interner {
             interner.str_to_id.insert(token.clone(), id);
             interner.id_to_str.push(token);
         }
-        interner
+
+        let mut corpus_ids = Vec::new();
+        for document in documents {
+            match line_delimiter {
+                Some(delim) => {
+                    for segment in document.split(delim) {
+                        let tokens = segment
+                            .split_whitespace()
+                            .map(|token| interner.id_for(token))
+                            .collect::<Vec<_>>();
+                        if !tokens.is_empty() {
+                            corpus_ids.push(tokens);
+                        }
+                    }
+                }
+                None => {
+                    let tokens = document
+                        .split_whitespace()
+                        .map(|token| interner.id_for(token))
+                        .collect::<Vec<_>>();
+                    if !tokens.is_empty() {
+                        corpus_ids.push(tokens);
+                    }
+                }
+            }
+        }
+
+        (interner, corpus_ids)
     }
 
     fn id_for(&self, value: &str) -> TokenId {
@@ -969,23 +1010,17 @@ type RunOutcome = (
 #[pymethods]
 impl Engine {
     #[new]
+    #[pyo3(signature = (corpus, method, min_count, tie_breaker, line_delimiter=None))]
     fn new(
-        corpus: Vec<Vec<String>>,
+        corpus: Vec<String>,
         method: &str,
         min_count: usize,
         tie_breaker: &str,
+        line_delimiter: Option<&str>,
     ) -> PyResult<Self> {
         let method = SelectionMethod::parse(method)?;
         let tie_breaker = TieBreaker::parse(tie_breaker)?;
-        let interner = Interner::from_corpus(&corpus);
-        let corpus_ids = corpus
-            .iter()
-            .map(|line| {
-                line.iter()
-                    .map(|token| interner.id_for(token))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+        let (interner, corpus_ids) = Interner::from_documents(&corpus, line_delimiter);
 
         let lexemes = LexemeData::from_corpus(&corpus_ids);
         let track_first_seen = tie_breaker == TieBreaker::LegacyFirstSeen;
@@ -1030,21 +1065,10 @@ fn _core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
 mod tests {
     use super::*;
 
-    fn build_engine(corpus: Vec<Vec<&str>>, method: SelectionMethod, min_count: i64) -> Engine {
-        let corpus = corpus
-            .into_iter()
-            .map(|line| line.into_iter().map(str::to_string).collect::<Vec<_>>())
-            .collect::<Vec<_>>();
+    fn build_engine(corpus: Vec<&str>, method: SelectionMethod, min_count: i64) -> Engine {
+        let corpus = corpus.into_iter().map(str::to_string).collect::<Vec<_>>();
 
-        let interner = Interner::from_corpus(&corpus);
-        let corpus_ids = corpus
-            .iter()
-            .map(|line| {
-                line.iter()
-                    .map(|token| interner.id_for(token))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
+        let (interner, corpus_ids) = Interner::from_documents(&corpus, Some("\n"));
         let lexemes = LexemeData::from_corpus(&corpus_ids);
         let bigrams = BigramData::from_lexemes(&lexemes, false);
 
@@ -1063,22 +1087,25 @@ mod tests {
 
     #[test]
     fn interner_roundtrip() {
-        let corpus = vec![vec!["b".to_string(), "a".to_string(), "b".to_string()]];
-        let interner = Interner::from_corpus(&corpus);
+        let corpus = vec!["b a b".to_string()];
+        let (interner, corpus_ids) = Interner::from_documents(&corpus, Some("\n"));
         let ids = vec![interner.id_for("a"), interner.id_for("b")];
         assert_eq!(interner.ids_to_strings(&ids), vec!["a", "b"]);
         assert!(interner.id_for("a") < interner.id_for("b"));
+        assert_eq!(
+            corpus_ids,
+            vec![vec![
+                interner.id_for("b"),
+                interner.id_for("a"),
+                interner.id_for("b")
+            ]]
+        );
     }
 
     #[test]
     fn deterministic_tie_break_prefers_frequency_then_lexicographic() {
         let mut engine = build_engine(
-            vec![
-                vec!["a", "d"],
-                vec!["a", "c"],
-                vec!["a", "b"],
-                vec!["a", "b"],
-            ],
+            vec!["a d", "a c", "a b", "a b"],
             SelectionMethod::Frequency,
             0,
         );
@@ -1091,7 +1118,7 @@ mod tests {
 
     #[test]
     fn engine_run_matches_repeated_step_for_frequency() {
-        let corpus = vec![vec!["a", "a", "a", "a"]];
+        let corpus = vec!["a a a a"];
         let mut run_engine = build_engine(corpus.clone(), SelectionMethod::Frequency, 0);
         let mut step_engine = build_engine(corpus, SelectionMethod::Frequency, 0);
 
@@ -1112,7 +1139,7 @@ mod tests {
 
     #[test]
     fn min_score_blocks_low_score_winner() {
-        let mut engine = build_engine(vec![vec!["a", "b", "c"]], SelectionMethod::Frequency, 0);
+        let mut engine = build_engine(vec!["a b c"], SelectionMethod::Frequency, 0);
         let status = engine.step_internal(Some(10.0));
         let StepStatus::BelowMinScore(score) = status else {
             panic!("expected below-min-score status");
