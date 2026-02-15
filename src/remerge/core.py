@@ -6,7 +6,7 @@ from itertools import groupby
 from pathlib import Path
 from typing import Literal, NewType, TypeVar
 
-from tqdm import tqdm, trange
+from tqdm import tqdm
 
 from ._core import Engine
 
@@ -88,7 +88,6 @@ StepPayload = tuple[
     list[str],
     int,
     list[tuple[int, int]],
-    list[tuple[int, int]],
 ]
 
 
@@ -109,9 +108,7 @@ def _coerce_enum(
         ) from exc
 
 
-def _winner_from_payload(
-    payload: StepPayload,
-) -> tuple[WinnerInfo, float, set[LineIndex]]:
+def _winner_from_payload(payload: StepPayload) -> tuple[WinnerInfo, float]:
     (
         selected_score,
         left_word,
@@ -121,7 +118,6 @@ def _winner_from_payload(
         merged_word,
         merged_ix,
         bigram_locations,
-        cleaned_locations,
     ) = payload
 
     winner = WinnerInfo(
@@ -135,8 +131,7 @@ def _winner_from_payload(
             for (line_ix, token_ix) in bigram_locations
         ],
     )
-    line_hits = {LineIndex(line_ix) for (line_ix, _) in cleaned_locations}
-    return winner, selected_score, line_hits
+    return winner, selected_score
 
 
 def run(
@@ -146,6 +141,7 @@ def run(
     method: SelectionMethod | str = SelectionMethod.log_likelihood,
     min_count: int = 0,
     output: Path | None = None,
+    output_debug_each_iteration: bool = False,
     progress_bar: ProgressBarOptions = "iterations",
     tie_breaker: TieBreaker | str = TieBreaker.deterministic,
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
@@ -156,56 +152,58 @@ def run(
     tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
     on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
-    winners: list[WinnerInfo] = []
     engine = Engine(corpus, method.value, min_count, tie_breaker.value)
 
     if output is not None:
         print(f"Outputting winning merged lexemes to '{output}'")
 
-    iterations_iter = (
-        trange(iterations)
-        if progress_bar in {"all", "iterations"}
-        else range(iterations)
+    return_progress = progress_bar in {"all", "iterations"}
+    status, payloads, selected_score, corpus_length, progress_entries = engine.run(
+        iterations, min_score, return_progress
     )
 
-    for _ in iterations_iter:
-        status, payload, selected_score = engine.step(min_score)
+    if status == "no_candidate" and on_exhausted is ExhaustionPolicy.raise_:
+        raise NoCandidateBigramError(
+            f"No candidate bigrams available for method={method.value!r} "
+            f"and min_count={min_count}."
+        )
 
-        if status == "no_candidate":
-            if on_exhausted is ExhaustionPolicy.raise_:
-                raise NoCandidateBigramError(
-                    f"No candidate bigrams available for method={method.value!r} "
-                    f"and min_count={min_count}."
-                )
-            break
+    if status == "below_min_score" and on_exhausted is ExhaustionPolicy.raise_:
+        raise NoCandidateBigramError(
+            f"Best candidate score ({selected_score}) is below min_score ({min_score})."
+        )
 
-        if status == "below_min_score":
-            if on_exhausted is ExhaustionPolicy.raise_:
-                raise NoCandidateBigramError(
-                    f"Best candidate score ({selected_score}) is below "
-                    f"min_score ({min_score})."
-                )
-            break
+    if status not in {"completed", "no_candidate", "below_min_score"}:
+        raise RuntimeError(f"Unexpected engine status {status!r}.")
 
-        if status != "winner" or payload is None:
-            raise RuntimeError(f"Unexpected engine status {status!r}.")
-
-        winner, score, line_hits = _winner_from_payload(payload)
+    winners: list[WinnerInfo] = []
+    for payload in payloads:
+        winner, _ = _winner_from_payload(payload)
         winners.append(winner)
 
-        if output is not None:
-            winner_lexemes = {i: w.merged_lexeme.word for i, w in enumerate(winners)}
-            output.write_text(json.dumps(winner_lexemes))
-
-        if isinstance(iterations_iter, tqdm):
-            corpus_length = engine.corpus_length()
-            pct_bgr = len(line_hits) / corpus_length if corpus_length else 0.0
-            iterations_iter.set_postfix(
+    if return_progress:
+        progress = tqdm(total=iterations)
+        for line_hits_count, score, merged_word in progress_entries:
+            pct_bgr = line_hits_count / corpus_length if corpus_length else 0.0
+            progress.update(1)
+            progress.set_postfix(
                 {
-                    "last_winner": winner.merged_lexeme.word,
+                    "last_winner": tuple(merged_word),
                     "score": f"{score:.4g}",
                     "pct_bgr": f"{pct_bgr * 100:.1f}%",
                 }
             )
+        progress.close()
+
+    if output is not None:
+        if output_debug_each_iteration:
+            for i in range(len(winners)):
+                winner_lexemes = {
+                    j: winners[j].merged_lexeme.word for j in range(i + 1)
+                }
+                output.write_text(json.dumps(winner_lexemes))
+        else:
+            winner_lexemes = {i: w.merged_lexeme.word for i, w in enumerate(winners)}
+            output.write_text(json.dumps(winner_lexemes))
 
     return winners

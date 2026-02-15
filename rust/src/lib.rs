@@ -1,12 +1,17 @@
 use indexmap::IndexMap;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 const SMALL: f64 = 1e-10;
 const SCORE_ATOL: f64 = 1e-12;
 const SCORE_RTOL: f64 = 1e-12;
+const FULL_RESCORE_INTERVAL: usize = 25;
+
+type TokenId = u32;
+type Location = (usize, usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectionMethod {
@@ -46,9 +51,49 @@ impl TieBreaker {
     }
 }
 
+#[derive(Default)]
+struct Interner {
+    str_to_id: HashMap<String, TokenId>,
+    id_to_str: Vec<String>,
+}
+
+impl Interner {
+    fn from_corpus(corpus: &[Vec<String>]) -> Self {
+        let mut uniq = HashSet::new();
+        for line in corpus {
+            for token in line {
+                uniq.insert(token.clone());
+            }
+        }
+        let mut sorted = uniq.into_iter().collect::<Vec<_>>();
+        sorted.sort_unstable();
+
+        let mut interner = Self::default();
+        for token in sorted {
+            let id = interner.id_to_str.len() as TokenId;
+            interner.str_to_id.insert(token.clone(), id);
+            interner.id_to_str.push(token);
+        }
+        interner
+    }
+
+    fn id_for(&self, value: &str) -> TokenId {
+        *self
+            .str_to_id
+            .get(value)
+            .expect("token missing in interner while converting corpus")
+    }
+
+    fn ids_to_strings(&self, ids: &[TokenId]) -> Vec<String> {
+        ids.iter()
+            .map(|id| self.id_to_str[*id as usize].clone())
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct Lexeme {
-    word: Vec<String>,
+    word: Vec<TokenId>,
     ix: usize,
 }
 
@@ -60,19 +105,19 @@ struct Bigram {
 
 #[derive(Default)]
 struct LexemeData {
-    lexemes_to_locations: HashMap<Lexeme, HashSet<(usize, usize)>>,
+    lexemes_to_locations: HashMap<Lexeme, HashSet<Location>>,
     locations_to_lexemes: Vec<Vec<Lexeme>>,
     lexemes_to_freqs: HashMap<Lexeme, i64>,
 }
 
 impl LexemeData {
-    fn from_corpus(corpus: &[Vec<String>]) -> Self {
+    fn from_corpus(corpus: &[Vec<TokenId>]) -> Self {
         let mut lexeme_data = Self::default();
         for (line_ix, tokens) in corpus.iter().enumerate() {
             let mut line_lexemes = Vec::with_capacity(tokens.len());
             for (word_ix, word) in tokens.iter().enumerate() {
                 let lexeme = Lexeme {
-                    word: vec![word.clone()],
+                    word: vec![*word],
                     ix: 0,
                 };
                 let loc = (line_ix, word_ix);
@@ -100,7 +145,7 @@ impl LexemeData {
         self.locations_to_lexemes.len()
     }
 
-    fn locations_to_root_lexemes(&self, line_ix: usize) -> Vec<(usize, Lexeme)> {
+    fn root_items_for_line(&self, line_ix: usize) -> Vec<(usize, Lexeme)> {
         self.locations_to_lexemes[line_ix]
             .iter()
             .enumerate()
@@ -113,7 +158,7 @@ impl LexemeData {
 #[derive(Default)]
 struct BigramData {
     bigrams_to_freqs: IndexMap<Bigram, i64>,
-    bigrams_to_locations: HashMap<Bigram, HashSet<(usize, usize)>>,
+    bigrams_to_locations: HashMap<Bigram, HashSet<Location>>,
     left_lex_freqs: HashMap<Lexeme, i64>,
     right_lex_freqs: HashMap<Lexeme, i64>,
 }
@@ -122,35 +167,31 @@ impl BigramData {
     fn from_lexemes(lexeme_data: &LexemeData) -> Self {
         let mut bigram_data = Self::default();
         for line_ix in 0..lexeme_data.corpus_length() {
-            let line_lexeme_data = lexeme_data.locations_to_root_lexemes(line_ix);
-            let mut line_bigrams = Vec::new();
-            for pair in line_lexeme_data.windows(2) {
-                let left_ix = pair[0].0;
-                let left = pair[0].1.clone();
-                let right = pair[1].1.clone();
-                let bigram = Bigram { left, right };
-                let location = (line_ix, left_ix);
+            let root_items = lexeme_data.root_items_for_line(line_ix);
+            for pair in root_items.windows(2) {
+                let bigram = Bigram {
+                    left: pair[0].1.clone(),
+                    right: pair[1].1.clone(),
+                };
+                let location = (line_ix, pair[0].0);
                 bigram_data
                     .bigrams_to_locations
                     .entry(bigram.clone())
                     .or_default()
                     .insert(location);
-                line_bigrams.push(bigram);
+                bigram_data.add_bigram(&bigram, 1);
             }
-            bigram_data.batch_add_bigrams(&line_bigrams);
         }
         bigram_data
     }
 
-    fn batch_add_bigrams(&mut self, bigram_locations: &[Bigram]) {
-        for bigram in bigram_locations {
-            *self.left_lex_freqs.entry(bigram.left.clone()).or_insert(0) += 1;
-            *self
-                .right_lex_freqs
-                .entry(bigram.right.clone())
-                .or_insert(0) += 1;
-            *self.bigrams_to_freqs.entry(bigram.clone()).or_insert(0) += 1;
-        }
+    fn add_bigram(&mut self, bigram: &Bigram, delta: i64) {
+        *self.left_lex_freqs.entry(bigram.left.clone()).or_insert(0) += delta;
+        *self
+            .right_lex_freqs
+            .entry(bigram.right.clone())
+            .or_insert(0) += delta;
+        *self.bigrams_to_freqs.entry(bigram.clone()).or_insert(0) += delta;
     }
 }
 
@@ -158,7 +199,7 @@ impl BigramData {
 struct WinnerInfo {
     bigram: Bigram,
     merged_lexeme: Lexeme,
-    bigram_locations: Vec<(usize, usize)>,
+    bigram_locations: Vec<Location>,
 }
 
 impl WinnerInfo {
@@ -190,7 +231,7 @@ impl WinnerInfo {
         self.merged_lexeme.word.len()
     }
 
-    fn cleaned_bigram_locations(&self) -> Vec<(usize, usize)> {
+    fn cleaned_bigram_locations(&self) -> Vec<Location> {
         let mut clean_locations = Vec::new();
         let mut ix = 0;
         while ix < self.bigram_locations.len() {
@@ -220,69 +261,22 @@ impl WinnerInfo {
 }
 
 #[derive(Clone)]
-struct ScoredBigram {
-    bigram: Bigram,
+struct CandidateScore {
     score: f64,
     frequency: i64,
 }
 
-impl ScoredBigram {
-    fn merged_word(&self) -> Vec<String> {
-        let mut merged =
-            Vec::with_capacity(self.bigram.left.word.len() + self.bigram.right.word.len());
-        merged.extend_from_slice(&self.bigram.left.word);
-        merged.extend_from_slice(&self.bigram.right.word);
-        merged
-    }
+#[derive(Clone)]
+struct StepData {
+    score: f64,
+    winner: WinnerInfo,
+    line_hits_count: usize,
 }
 
-struct BigramCandidateData {
-    bigram_index: Vec<Bigram>,
-    bigram_freq_array: Vec<i64>,
-    el1_freq_array: Vec<i64>,
-    el2_freq_array: Vec<i64>,
-    total_bigram_count: i64,
-}
-
-impl BigramCandidateData {
-    fn from_bigram_data(bigram_data: &BigramData, min_count: i64) -> Self {
-        let total_bigram_count = bigram_data.bigrams_to_freqs.values().sum::<i64>();
-        let candidate_items = bigram_data
-            .bigrams_to_freqs
-            .iter()
-            .filter(|(_, freq)| **freq >= min_count)
-            .collect::<Vec<_>>();
-
-        if candidate_items.is_empty() {
-            return Self {
-                bigram_index: Vec::new(),
-                bigram_freq_array: Vec::new(),
-                el1_freq_array: Vec::new(),
-                el2_freq_array: Vec::new(),
-                total_bigram_count,
-            };
-        }
-
-        let mut bigram_index = Vec::with_capacity(candidate_items.len());
-        let mut bigram_freq_array = Vec::with_capacity(candidate_items.len());
-        let mut el1_freq_array = Vec::with_capacity(candidate_items.len());
-        let mut el2_freq_array = Vec::with_capacity(candidate_items.len());
-
-        for (bigram, freq) in candidate_items {
-            bigram_index.push((*bigram).clone());
-            bigram_freq_array.push(*freq);
-            el1_freq_array.push(*bigram_data.left_lex_freqs.get(&bigram.left).unwrap_or(&0));
-            el2_freq_array.push(*bigram_data.right_lex_freqs.get(&bigram.right).unwrap_or(&0));
-        }
-
-        Self {
-            bigram_index,
-            bigram_freq_array,
-            el1_freq_array,
-            el2_freq_array,
-            total_bigram_count,
-        }
-    }
+enum StepStatus {
+    Winner(StepData),
+    NoCandidate,
+    BelowMinScore(f64),
 }
 
 fn safe_ll_term(observed: f64, expected: f64) -> f64 {
@@ -293,135 +287,6 @@ fn safe_ll_term(observed: f64, expected: f64) -> f64 {
     }
 }
 
-fn calculate_npmi(data: &BigramCandidateData) -> Vec<f64> {
-    if data.total_bigram_count == 0 {
-        return Vec::new();
-    }
-
-    let total = data.total_bigram_count as f64;
-    let mut scores = Vec::with_capacity(data.bigram_freq_array.len());
-    for i in 0..data.bigram_freq_array.len() {
-        let prob_ab = data.bigram_freq_array[i] as f64 / total;
-        let prob_a = data.el1_freq_array[i] as f64 / total;
-        let prob_b = data.el2_freq_array[i] as f64 / total;
-
-        let numerator = (prob_ab / (prob_a * prob_b)).ln();
-        let denominator = -(prob_ab.ln());
-        let npmi = if denominator > 0.0 {
-            numerator / denominator
-        } else {
-            f64::NAN
-        };
-
-        let perfect_association =
-            is_close_default(denominator, 0.0) && is_close_default(numerator, 0.0);
-        if perfect_association {
-            scores.push(1.0);
-        } else {
-            scores.push(npmi);
-        }
-    }
-
-    scores
-}
-
-fn calculate_log_likelihood(data: &BigramCandidateData) -> Vec<f64> {
-    if data.total_bigram_count == 0 {
-        return Vec::new();
-    }
-
-    let total = data.total_bigram_count as f64;
-    let mut scores = Vec::with_capacity(data.bigram_freq_array.len());
-
-    for i in 0..data.bigram_freq_array.len() {
-        let obs_a = data.bigram_freq_array[i] as f64;
-        let obs_b = data.el1_freq_array[i] as f64 - obs_a;
-        let obs_c = data.el2_freq_array[i] as f64 - obs_a;
-        let mut obs_d = total - obs_a - obs_b - obs_c;
-        if obs_d < 0.0 {
-            obs_d = 0.0;
-        }
-
-        let exp_a = ((obs_a + obs_b) * (obs_a + obs_c)) / total;
-        let exp_b = ((obs_a + obs_b) * (obs_b + obs_d)) / total;
-        let exp_c = ((obs_c + obs_d) * (obs_a + obs_c)) / total;
-        let exp_d = ((obs_c + obs_d) * (obs_b + obs_d)) / total;
-
-        let ll_a = safe_ll_term(obs_a, exp_a);
-        let ll_b = safe_ll_term(obs_b, exp_b);
-        let ll_c = safe_ll_term(obs_c, exp_c);
-        let ll_d = safe_ll_term(obs_d, exp_d);
-
-        let log_likelihood = 2.0 * (ll_a + ll_b + ll_c + ll_d);
-        if obs_a > exp_a {
-            scores.push(log_likelihood);
-        } else {
-            scores.push(-log_likelihood);
-        }
-    }
-
-    scores
-}
-
-fn coerce_scores(scores: Vec<f64>) -> Vec<f64> {
-    scores
-        .into_iter()
-        .map(|score| {
-            if score.is_finite() {
-                score
-            } else {
-                f64::NEG_INFINITY
-            }
-        })
-        .collect()
-}
-
-fn as_scored_bigrams(data: &BigramCandidateData, scores: Vec<f64>) -> Vec<ScoredBigram> {
-    let safe_scores = coerce_scores(scores);
-    if safe_scores.is_empty() || safe_scores.iter().all(|score| *score == f64::NEG_INFINITY) {
-        return Vec::new();
-    }
-
-    data.bigram_index
-        .iter()
-        .zip(safe_scores.iter())
-        .zip(data.bigram_freq_array.iter())
-        .map(|((bigram, score), freq)| ScoredBigram {
-            bigram: bigram.clone(),
-            score: *score,
-            frequency: *freq,
-        })
-        .collect()
-}
-
-fn calculate_candidates_log_likelihood(
-    bigram_data: &BigramData,
-    min_count: i64,
-) -> Vec<ScoredBigram> {
-    let data = BigramCandidateData::from_bigram_data(bigram_data, min_count);
-    let scores = calculate_log_likelihood(&data);
-    as_scored_bigrams(&data, scores)
-}
-
-fn calculate_candidates_npmi(bigram_data: &BigramData, min_count: i64) -> Vec<ScoredBigram> {
-    let data = BigramCandidateData::from_bigram_data(bigram_data, min_count);
-    let scores = calculate_npmi(&data);
-    as_scored_bigrams(&data, scores)
-}
-
-fn calculate_candidates_frequency(bigram_data: &BigramData, min_count: i64) -> Vec<ScoredBigram> {
-    bigram_data
-        .bigrams_to_freqs
-        .iter()
-        .filter(|(_, freq)| **freq >= min_count)
-        .map(|(bigram, freq)| ScoredBigram {
-            bigram: bigram.clone(),
-            score: *freq as f64,
-            frequency: *freq,
-        })
-        .collect()
-}
-
 fn scores_close(a: f64, b: f64) -> bool {
     (a - b).abs() <= (SCORE_ATOL + SCORE_RTOL * b.abs())
 }
@@ -430,39 +295,186 @@ fn is_close_default(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-8 + (1e-5 * b.abs())
 }
 
-fn select_candidate(candidates: &[ScoredBigram], tie_breaker: TieBreaker) -> Option<ScoredBigram> {
-    if candidates.is_empty() {
+fn coerce_score(score: f64) -> f64 {
+    if score.is_finite() {
+        score
+    } else {
+        f64::NEG_INFINITY
+    }
+}
+
+fn score_ll_npmi(
+    method: SelectionMethod,
+    bigram_freq: i64,
+    left_freq: i64,
+    right_freq: i64,
+    total_bigram_count: i64,
+) -> f64 {
+    if total_bigram_count == 0 {
+        return f64::NEG_INFINITY;
+    }
+
+    let total = total_bigram_count as f64;
+
+    match method {
+        SelectionMethod::LogLikelihood => {
+            let obs_a = bigram_freq as f64;
+            let obs_b = left_freq as f64 - obs_a;
+            let obs_c = right_freq as f64 - obs_a;
+            let mut obs_d = total - obs_a - obs_b - obs_c;
+            if obs_d < 0.0 {
+                obs_d = 0.0;
+            }
+
+            let exp_a = ((obs_a + obs_b) * (obs_a + obs_c)) / total;
+            let exp_b = ((obs_a + obs_b) * (obs_b + obs_d)) / total;
+            let exp_c = ((obs_c + obs_d) * (obs_a + obs_c)) / total;
+            let exp_d = ((obs_c + obs_d) * (obs_b + obs_d)) / total;
+
+            let ll_a = safe_ll_term(obs_a, exp_a);
+            let ll_b = safe_ll_term(obs_b, exp_b);
+            let ll_c = safe_ll_term(obs_c, exp_c);
+            let ll_d = safe_ll_term(obs_d, exp_d);
+            let ll = 2.0 * (ll_a + ll_b + ll_c + ll_d);
+            coerce_score(if obs_a > exp_a { ll } else { -ll })
+        }
+        SelectionMethod::Npmi => {
+            let prob_ab = bigram_freq as f64 / total;
+            let prob_a = left_freq as f64 / total;
+            let prob_b = right_freq as f64 / total;
+            let numerator = (prob_ab / (prob_a * prob_b)).ln();
+            let denominator = -(prob_ab.ln());
+            let npmi = if denominator > 0.0 {
+                numerator / denominator
+            } else {
+                f64::NAN
+            };
+            let perfect_association =
+                is_close_default(denominator, 0.0) && is_close_default(numerator, 0.0);
+            coerce_score(if perfect_association { 1.0 } else { npmi })
+        }
+        SelectionMethod::Frequency => bigram_freq as f64,
+    }
+}
+
+fn merged_word_ids(bigram: &Bigram) -> Vec<TokenId> {
+    let mut merged = Vec::with_capacity(bigram.left.word.len() + bigram.right.word.len());
+    merged.extend_from_slice(&bigram.left.word);
+    merged.extend_from_slice(&bigram.right.word);
+    merged
+}
+
+fn select_candidate(
+    tie_breaker: TieBreaker,
+    method: SelectionMethod,
+    bigrams_to_freqs: &IndexMap<Bigram, i64>,
+    candidate_scores: &HashMap<Bigram, CandidateScore>,
+    min_count: i64,
+) -> Option<(Bigram, CandidateScore)> {
+    if method == SelectionMethod::Frequency {
+        if tie_breaker == TieBreaker::LegacyFirstSeen {
+            let mut best: Option<(Bigram, CandidateScore)> = None;
+            let mut best_score = f64::NEG_INFINITY;
+            for (bigram, freq) in bigrams_to_freqs {
+                if *freq < min_count {
+                    continue;
+                }
+                let score = *freq as f64;
+                if score > best_score {
+                    best_score = score;
+                    best = Some((
+                        bigram.clone(),
+                        CandidateScore {
+                            score,
+                            frequency: *freq,
+                        },
+                    ));
+                }
+            }
+            return best;
+        }
+
+        let mut best: Option<(Bigram, CandidateScore)> = None;
+        let mut best_key: Option<(Reverse<i64>, Vec<TokenId>)> = None;
+        let mut max_score = f64::NEG_INFINITY;
+
+        for (bigram, freq) in bigrams_to_freqs {
+            if *freq < min_count {
+                continue;
+            }
+            let score = *freq as f64;
+            if score > max_score {
+                max_score = score;
+                best = Some((
+                    bigram.clone(),
+                    CandidateScore {
+                        score,
+                        frequency: *freq,
+                    },
+                ));
+                best_key = Some((Reverse(*freq), merged_word_ids(bigram)));
+                continue;
+            }
+
+            if !scores_close(score, max_score) {
+                continue;
+            }
+
+            let candidate_key = (Reverse(*freq), merged_word_ids(bigram));
+            if let Some(key) = &best_key {
+                if candidate_key < *key {
+                    best = Some((
+                        bigram.clone(),
+                        CandidateScore {
+                            score,
+                            frequency: *freq,
+                        },
+                    ));
+                    best_key = Some(candidate_key);
+                }
+            }
+        }
+
+        return best;
+    }
+
+    if candidate_scores.is_empty() {
         return None;
     }
 
-    let max_score = candidates
-        .iter()
-        .map(|candidate| candidate.score)
+    let max_score = candidate_scores
+        .values()
+        .map(|c| c.score)
         .fold(f64::NEG_INFINITY, f64::max);
 
     if tie_breaker == TieBreaker::LegacyFirstSeen {
-        return candidates
-            .iter()
-            .find(|candidate| scores_close(candidate.score, max_score))
-            .cloned();
+        for (bigram, _) in bigrams_to_freqs {
+            if let Some(candidate) = candidate_scores.get(bigram) {
+                if scores_close(candidate.score, max_score) {
+                    return Some((bigram.clone(), candidate.clone()));
+                }
+            }
+        }
+        return None;
     }
 
-    let mut best_candidate: Option<ScoredBigram> = None;
-    let mut best_key: Option<(Reverse<i64>, Vec<String>)> = None;
+    let mut best: Option<(Bigram, CandidateScore)> = None;
+    let mut best_key: Option<(Reverse<i64>, Vec<TokenId>)> = None;
 
-    for candidate in candidates {
+    for (bigram, candidate) in candidate_scores {
         if !scores_close(candidate.score, max_score) {
             continue;
         }
-        let candidate_key = (Reverse(candidate.frequency), candidate.merged_word());
-        match (&best_candidate, &best_key) {
+
+        let candidate_key = (Reverse(candidate.frequency), merged_word_ids(bigram));
+        match (&best, &best_key) {
             (None, None) => {
-                best_candidate = Some(candidate.clone());
+                best = Some((bigram.clone(), candidate.clone()));
                 best_key = Some(candidate_key);
             }
             (Some(_), Some(key)) => {
                 if candidate_key < *key {
-                    best_candidate = Some(candidate.clone());
+                    best = Some((bigram.clone(), candidate.clone()));
                     best_key = Some(candidate_key);
                 }
             }
@@ -470,29 +482,19 @@ fn select_candidate(candidates: &[ScoredBigram], tie_breaker: TieBreaker) -> Opt
         }
     }
 
-    best_candidate
-}
-
-fn adjacent_bigrams(lexemes: &[Lexeme]) -> Vec<Bigram> {
-    lexemes
-        .windows(2)
-        .map(|pair| Bigram {
-            left: pair[0].clone(),
-            right: pair[1].clone(),
-        })
-        .collect()
+    best
 }
 
 fn merge_winner(
     winner: &WinnerInfo,
-    clean_locations: &[(usize, usize)],
+    clean_locations: &[Location],
     lexeme_data: &mut LexemeData,
     bigram_data: &mut BigramData,
-) {
-    let bigram_lines = clean_locations
-        .iter()
-        .map(|(line_ix, _)| *line_ix)
-        .collect::<HashSet<_>>();
+) -> HashSet<Bigram> {
+    let mut bigram_lines = HashSet::new();
+    for (line_ix, _) in clean_locations {
+        bigram_lines.insert(*line_ix);
+    }
 
     let mut touched_lexemes = HashSet::new();
     touched_lexemes.insert(winner.merged_lexeme.clone());
@@ -504,7 +506,7 @@ fn merge_winner(
 
     let mut old_bigrams_lookup: HashMap<usize, Vec<(usize, Lexeme)>> = HashMap::new();
     for line_ix in bigram_lines {
-        old_bigrams_lookup.insert(line_ix, lexeme_data.locations_to_root_lexemes(line_ix));
+        old_bigrams_lookup.insert(line_ix, lexeme_data.root_items_for_line(line_ix));
     }
 
     for (line_ix, word_ix) in clean_locations.iter().copied() {
@@ -531,72 +533,53 @@ fn merge_winner(
     }
 
     for (line_ix, old_root_items) in old_bigrams_lookup {
-        let old_root_lexemes = old_root_items
-            .iter()
-            .map(|(_, lexeme)| lexeme.clone())
+        let old_bigrams = old_root_items
+            .windows(2)
+            .map(|pair| {
+                (
+                    Bigram {
+                        left: pair[0].1.clone(),
+                        right: pair[1].1.clone(),
+                    },
+                    (line_ix, pair[0].0),
+                )
+            })
             .collect::<Vec<_>>();
-        let old_bigrams = adjacent_bigrams(&old_root_lexemes);
-        for bigram in old_bigrams.iter().cloned() {
-            touched_bigrams.insert(bigram);
-        }
 
-        let new_root_items = lexeme_data.locations_to_root_lexemes(line_ix);
-        let new_root_lexemes = new_root_items
-            .iter()
-            .map(|(_, lexeme)| lexeme.clone())
+        let new_root_items = lexeme_data.root_items_for_line(line_ix);
+        let new_bigrams = new_root_items
+            .windows(2)
+            .map(|pair| {
+                (
+                    Bigram {
+                        left: pair[0].1.clone(),
+                        right: pair[1].1.clone(),
+                    },
+                    (line_ix, pair[0].0),
+                )
+            })
             .collect::<Vec<_>>();
-        let new_bigrams = adjacent_bigrams(&new_root_lexemes);
-        for bigram in new_bigrams.iter().cloned() {
-            touched_bigrams.insert(bigram);
+
+        for (bigram, _) in &old_bigrams {
+            touched_bigrams.insert(bigram.clone());
+        }
+        for (bigram, _) in &new_bigrams {
+            touched_bigrams.insert(bigram.clone());
         }
 
-        for bigram in &new_bigrams {
-            *bigram_data
-                .bigrams_to_freqs
-                .entry(bigram.clone())
-                .or_insert(0) += 1;
-            *bigram_data
-                .left_lex_freqs
-                .entry(bigram.left.clone())
-                .or_insert(0) += 1;
-            *bigram_data
-                .right_lex_freqs
-                .entry(bigram.right.clone())
-                .or_insert(0) += 1;
+        for (bigram, _) in &new_bigrams {
+            bigram_data.add_bigram(bigram, 1);
+        }
+        for (bigram, _) in &old_bigrams {
+            bigram_data.add_bigram(bigram, -1);
         }
 
-        for bigram in &old_bigrams {
-            *bigram_data
-                .bigrams_to_freqs
-                .entry(bigram.clone())
-                .or_insert(0) -= 1;
-            *bigram_data
-                .left_lex_freqs
-                .entry(bigram.left.clone())
-                .or_insert(0) -= 1;
-            *bigram_data
-                .right_lex_freqs
-                .entry(bigram.right.clone())
-                .or_insert(0) -= 1;
-        }
-
-        for pair in old_root_items.windows(2) {
-            let left_ix = pair[0].0;
-            let left = pair[0].1.clone();
-            let right = pair[1].1.clone();
-            let bigram = Bigram { left, right };
-            let location = (line_ix, left_ix);
+        for (bigram, location) in old_bigrams {
             if let Some(locations) = bigram_data.bigrams_to_locations.get_mut(&bigram) {
                 locations.remove(&location);
             }
         }
-
-        for pair in new_root_items.windows(2) {
-            let left_ix = pair[0].0;
-            let left = pair[0].1.clone();
-            let right = pair[1].1.clone();
-            let bigram = Bigram { left, right };
-            let location = (line_ix, left_ix);
+        for (bigram, location) in new_bigrams {
             bigram_data
                 .bigrams_to_locations
                 .entry(bigram)
@@ -638,26 +621,26 @@ fn merge_winner(
     }
 
     let mut touched_lr_lexemes = HashSet::new();
-    for bigram in touched_bigrams {
+    for bigram in &touched_bigrams {
         touched_lr_lexemes.insert(bigram.left.clone());
         touched_lr_lexemes.insert(bigram.right.clone());
 
         let remove_freq = bigram_data
             .bigrams_to_freqs
-            .get(&bigram)
+            .get(bigram)
             .map(|freq| *freq <= 0)
             .unwrap_or(false);
         if remove_freq {
-            bigram_data.bigrams_to_freqs.shift_remove(&bigram);
+            bigram_data.bigrams_to_freqs.shift_remove(bigram);
         }
 
         let remove_locations = bigram_data
             .bigrams_to_locations
-            .get(&bigram)
+            .get(bigram)
             .map(|locations| locations.is_empty())
             .unwrap_or(true);
         if remove_locations {
-            bigram_data.bigrams_to_locations.remove(&bigram);
+            bigram_data.bigrams_to_locations.remove(bigram);
         }
     }
 
@@ -681,70 +664,241 @@ fn merge_winner(
         }
     }
 
-    debug_assert!(!bigram_data.bigrams_to_freqs.contains_key(&winner.bigram));
-}
-
-#[derive(Clone)]
-struct StepData {
-    score: f64,
-    winner: WinnerInfo,
-    clean_locations: Vec<(usize, usize)>,
-}
-
-enum StepStatus {
-    Winner(StepData),
-    NoCandidate,
-    BelowMinScore(f64),
+    touched_bigrams
 }
 
 #[pyclass]
 struct Engine {
+    interner: Interner,
     lexemes: LexemeData,
     bigrams: BigramData,
     method: SelectionMethod,
     min_count: i64,
     tie_breaker: TieBreaker,
+    candidate_scores: HashMap<Bigram, CandidateScore>,
+    dirty_bigrams: HashSet<Bigram>,
+    iteration_counter: usize,
 }
 
 impl Engine {
-    fn calculate_candidates(&self) -> Vec<ScoredBigram> {
-        match self.method {
-            SelectionMethod::Frequency => {
-                calculate_candidates_frequency(&self.bigrams, self.min_count)
+    fn refresh_candidate_scores(&mut self, force_full: bool) {
+        if self.method == SelectionMethod::Frequency {
+            return;
+        }
+
+        let full = force_full
+            || self.candidate_scores.is_empty()
+            || self.iteration_counter.is_multiple_of(FULL_RESCORE_INTERVAL);
+
+        let total_bigram_count = self.bigrams.bigrams_to_freqs.values().sum::<i64>();
+
+        if full {
+            let snapshot = self
+                .bigrams
+                .bigrams_to_freqs
+                .iter()
+                .filter(|(_, freq)| **freq >= self.min_count)
+                .map(|(bigram, freq)| {
+                    (
+                        bigram.clone(),
+                        *freq,
+                        *self.bigrams.left_lex_freqs.get(&bigram.left).unwrap_or(&0),
+                        *self
+                            .bigrams
+                            .right_lex_freqs
+                            .get(&bigram.right)
+                            .unwrap_or(&0),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let scored = snapshot
+                .par_iter()
+                .map(|(bigram, freq, left_freq, right_freq)| {
+                    (
+                        bigram.clone(),
+                        CandidateScore {
+                            score: score_ll_npmi(
+                                self.method,
+                                *freq,
+                                *left_freq,
+                                *right_freq,
+                                total_bigram_count,
+                            ),
+                            frequency: *freq,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            self.candidate_scores.clear();
+            for (bigram, score) in scored {
+                if score.score > f64::NEG_INFINITY {
+                    self.candidate_scores.insert(bigram, score);
+                }
             }
-            SelectionMethod::LogLikelihood => {
-                calculate_candidates_log_likelihood(&self.bigrams, self.min_count)
+            self.dirty_bigrams.clear();
+            return;
+        }
+
+        let dirty = self.dirty_bigrams.drain().collect::<Vec<_>>();
+        let dirty_snapshot = dirty
+            .into_iter()
+            .map(|bigram| {
+                (
+                    bigram.clone(),
+                    self.bigrams.bigrams_to_freqs.get(&bigram).copied(),
+                    self.bigrams.left_lex_freqs.get(&bigram.left).copied(),
+                    self.bigrams.right_lex_freqs.get(&bigram.right).copied(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let rescored = dirty_snapshot
+            .par_iter()
+            .map(|(bigram, maybe_freq, maybe_left, maybe_right)| {
+                let Some(freq) = maybe_freq else {
+                    return (bigram.clone(), None);
+                };
+                if *freq < self.min_count {
+                    return (bigram.clone(), None);
+                }
+                let left_freq = maybe_left.unwrap_or(0);
+                let right_freq = maybe_right.unwrap_or(0);
+                let score = score_ll_npmi(
+                    self.method,
+                    *freq,
+                    left_freq,
+                    right_freq,
+                    total_bigram_count,
+                );
+                if score == f64::NEG_INFINITY {
+                    (bigram.clone(), None)
+                } else {
+                    (
+                        bigram.clone(),
+                        Some(CandidateScore {
+                            score,
+                            frequency: *freq,
+                        }),
+                    )
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for (bigram, maybe_score) in rescored {
+            if let Some(score) = maybe_score {
+                self.candidate_scores.insert(bigram, score);
+            } else {
+                self.candidate_scores.remove(&bigram);
             }
-            SelectionMethod::Npmi => calculate_candidates_npmi(&self.bigrams, self.min_count),
         }
     }
 
+    fn token_ids_to_strings(&self, token_ids: &[TokenId]) -> Vec<String> {
+        self.interner.ids_to_strings(token_ids)
+    }
+
+    fn step_payload(&self, step_data: StepData) -> StepPayload {
+        (
+            step_data.score,
+            self.token_ids_to_strings(&step_data.winner.bigram.left.word),
+            step_data.winner.bigram.left.ix,
+            self.token_ids_to_strings(&step_data.winner.bigram.right.word),
+            step_data.winner.bigram.right.ix,
+            self.token_ids_to_strings(&step_data.winner.merged_lexeme.word),
+            step_data.winner.merged_lexeme.ix,
+            step_data.winner.bigram_locations,
+        )
+    }
+
     fn step_internal(&mut self, min_score: Option<f64>) -> StepStatus {
-        let candidates = self.calculate_candidates();
-        let Some(selected) = select_candidate(&candidates, self.tie_breaker) else {
+        self.refresh_candidate_scores(false);
+
+        let Some((bigram, candidate)) = select_candidate(
+            self.tie_breaker,
+            self.method,
+            &self.bigrams.bigrams_to_freqs,
+            &self.candidate_scores,
+            self.min_count,
+        ) else {
             return StepStatus::NoCandidate;
         };
 
         if let Some(score_threshold) = min_score {
-            if selected.score < score_threshold {
-                return StepStatus::BelowMinScore(selected.score);
+            if candidate.score < score_threshold {
+                return StepStatus::BelowMinScore(candidate.score);
             }
         }
 
-        let winner = WinnerInfo::from_bigram_with_data(&selected.bigram, &self.bigrams);
+        let winner = WinnerInfo::from_bigram_with_data(&bigram, &self.bigrams);
         let clean_locations = winner.cleaned_bigram_locations();
-        merge_winner(
+        let line_hits_count = clean_locations
+            .iter()
+            .map(|(line_ix, _)| *line_ix)
+            .collect::<HashSet<_>>()
+            .len();
+
+        let touched = merge_winner(
             &winner,
             &clean_locations,
             &mut self.lexemes,
             &mut self.bigrams,
         );
+        self.dirty_bigrams = touched;
+        self.iteration_counter += 1;
 
         StepStatus::Winner(StepData {
-            score: selected.score,
+            score: candidate.score,
             winner,
-            clean_locations,
+            line_hits_count,
         })
+    }
+
+    fn run_internal(
+        &mut self,
+        iterations: usize,
+        min_score: Option<f64>,
+        return_progress: bool,
+    ) -> RunOutcome {
+        let mut winners = Vec::new();
+        let mut progress = Vec::new();
+        let corpus_length = self.lexemes.corpus_length();
+
+        for _ in 0..iterations {
+            match self.step_internal(min_score) {
+                StepStatus::NoCandidate => {
+                    return (
+                        "no_candidate".to_string(),
+                        winners,
+                        None,
+                        corpus_length,
+                        progress,
+                    )
+                }
+                StepStatus::BelowMinScore(score) => {
+                    return (
+                        "below_min_score".to_string(),
+                        winners,
+                        Some(score),
+                        corpus_length,
+                        progress,
+                    )
+                }
+                StepStatus::Winner(step_data) => {
+                    if return_progress {
+                        progress.push((
+                            step_data.line_hits_count,
+                            step_data.score,
+                            self.token_ids_to_strings(&step_data.winner.merged_lexeme.word),
+                        ));
+                    }
+                    winners.push(self.step_payload(step_data));
+                }
+            }
+        }
+
+        ("completed".to_string(), winners, None, corpus_length, progress)
     }
 }
 
@@ -757,10 +911,16 @@ type StepPayload = (
     Vec<String>,
     usize,
     Vec<(usize, usize)>,
-    Vec<(usize, usize)>,
 );
 
-type StepOutcome = (String, Option<StepPayload>, Option<f64>);
+type ProgressPayload = (usize, f64, Vec<String>);
+type RunOutcome = (
+    String,
+    Vec<StepPayload>,
+    Option<f64>,
+    usize,
+    Vec<ProgressPayload>,
+);
 
 #[pymethods]
 impl Engine {
@@ -773,15 +933,29 @@ impl Engine {
     ) -> PyResult<Self> {
         let method = SelectionMethod::parse(method)?;
         let tie_breaker = TieBreaker::parse(tie_breaker)?;
-        let lexemes = LexemeData::from_corpus(&corpus);
+        let interner = Interner::from_corpus(&corpus);
+        let corpus_ids = corpus
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|token| interner.id_for(token))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let lexemes = LexemeData::from_corpus(&corpus_ids);
         let bigrams = BigramData::from_lexemes(&lexemes);
 
         Ok(Self {
+            interner,
             lexemes,
             bigrams,
             method,
             min_count: min_count as i64,
             tie_breaker,
+            candidate_scores: HashMap::new(),
+            dirty_bigrams: HashSet::new(),
+            iteration_counter: 0,
         })
     }
 
@@ -789,31 +963,18 @@ impl Engine {
         self.lexemes.corpus_length()
     }
 
-    #[pyo3(signature = (min_score=None))]
-    fn step(&mut self, py: Python<'_>, min_score: Option<f64>) -> StepOutcome {
-        let step_result = py.allow_threads(|| self.step_internal(min_score));
-        match step_result {
-            StepStatus::NoCandidate => ("no_candidate".to_string(), None, None),
-            StepStatus::BelowMinScore(score) => ("below_min_score".to_string(), None, Some(score)),
-            StepStatus::Winner(step_data) => {
-                let payload = (
-                    step_data.score,
-                    step_data.winner.bigram.left.word,
-                    step_data.winner.bigram.left.ix,
-                    step_data.winner.bigram.right.word,
-                    step_data.winner.bigram.right.ix,
-                    step_data.winner.merged_lexeme.word,
-                    step_data.winner.merged_lexeme.ix,
-                    step_data.winner.bigram_locations,
-                    step_data.clean_locations,
-                );
-                ("winner".to_string(), Some(payload), Some(step_data.score))
-            }
-        }
+    #[pyo3(signature = (iterations, min_score=None, return_progress=false))]
+    fn run(
+        &mut self,
+        py: Python<'_>,
+        iterations: usize,
+        min_score: Option<f64>,
+        return_progress: bool,
+    ) -> RunOutcome {
+        py.allow_threads(|| self.run_internal(iterations, min_score, return_progress))
     }
 }
 
-// This module currently assumes GIL use for Python interaction.
 #[pymodule(gil_used = true)]
 fn _core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Engine>()?;
@@ -830,15 +991,38 @@ mod tests {
             .map(|line| line.into_iter().map(str::to_string).collect::<Vec<_>>())
             .collect::<Vec<_>>();
 
-        let lexemes = LexemeData::from_corpus(&corpus);
+        let interner = Interner::from_corpus(&corpus);
+        let corpus_ids = corpus
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|token| interner.id_for(token))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let lexemes = LexemeData::from_corpus(&corpus_ids);
         let bigrams = BigramData::from_lexemes(&lexemes);
+
         Engine {
+            interner,
             lexemes,
             bigrams,
             method,
             min_count,
             tie_breaker: TieBreaker::Deterministic,
+            candidate_scores: HashMap::new(),
+            dirty_bigrams: HashSet::new(),
+            iteration_counter: 0,
         }
+    }
+
+    #[test]
+    fn interner_roundtrip() {
+        let corpus = vec![vec!["b".to_string(), "a".to_string(), "b".to_string()]];
+        let interner = Interner::from_corpus(&corpus);
+        let ids = vec![interner.id_for("a"), interner.id_for("b")];
+        assert_eq!(interner.ids_to_strings(&ids), vec!["a", "b"]);
+        assert!(interner.id_for("a") < interner.id_for("b"));
     }
 
     #[test]
@@ -856,29 +1040,29 @@ mod tests {
         let StepStatus::Winner(step) = engine.step_internal(None) else {
             panic!("expected winner");
         };
-        assert_eq!(step.winner.merged_lexeme.word, vec!["a", "b"]);
+        let merged = engine.token_ids_to_strings(&step.winner.merged_lexeme.word);
+        assert_eq!(merged, vec!["a", "b"]);
     }
 
     #[test]
-    fn legacy_tie_break_is_first_seen() {
-        let corpus = vec![vec!["c", "d"], vec!["a", "b"]]
-            .into_iter()
-            .map(|line| line.into_iter().map(str::to_string).collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-        let lexemes = LexemeData::from_corpus(&corpus);
-        let bigrams = BigramData::from_lexemes(&lexemes);
-        let mut engine = Engine {
-            lexemes,
-            bigrams,
-            method: SelectionMethod::Frequency,
-            min_count: 0,
-            tie_breaker: TieBreaker::LegacyFirstSeen,
-        };
+    fn engine_run_matches_repeated_step_for_frequency() {
+        let corpus = vec![vec!["a", "a", "a", "a"]];
+        let mut run_engine = build_engine(corpus.clone(), SelectionMethod::Frequency, 0);
+        let mut step_engine = build_engine(corpus, SelectionMethod::Frequency, 0);
 
-        let StepStatus::Winner(step) = engine.step_internal(None) else {
-            panic!("expected winner");
-        };
-        assert_eq!(step.winner.merged_lexeme.word, vec!["c", "d"]);
+        let (_, run_payloads, _, _, _) = run_engine.run_internal(3, None, false);
+
+        let mut step_payloads = Vec::new();
+        for _ in 0..3 {
+            match step_engine.step_internal(None) {
+                StepStatus::Winner(step_data) => {
+                    step_payloads.push(step_engine.step_payload(step_data))
+                }
+                _ => break,
+            }
+        }
+
+        assert_eq!(run_payloads, step_payloads);
     }
 
     #[test]
@@ -889,106 +1073,5 @@ mod tests {
             panic!("expected below-min-score status");
         };
         assert_eq!(score, 1.0);
-    }
-
-    #[test]
-    fn merge_invariants_hold_on_small_corpus() {
-        let mut engine = build_engine(
-            vec![
-                vec!["a", "a", "a", "a"],
-                vec!["c", "a", "b", "a", "b", "a", "b", "d"],
-            ],
-            SelectionMethod::Frequency,
-            0,
-        );
-
-        for _ in 0..8 {
-            let status = engine.step_internal(None);
-            let StepStatus::Winner(step) = status else {
-                break;
-            };
-            assert!(!engine
-                .bigrams
-                .bigrams_to_freqs
-                .contains_key(&step.winner.bigram));
-            assert!(engine
-                .lexemes
-                .lexemes_to_freqs
-                .values()
-                .all(|freq| *freq > 0));
-            assert!(engine
-                .bigrams
-                .bigrams_to_freqs
-                .values()
-                .all(|freq| *freq > 0));
-            assert!(engine
-                .lexemes
-                .lexemes_to_locations
-                .values()
-                .all(|locations| !locations.is_empty()));
-            assert!(engine
-                .bigrams
-                .bigrams_to_locations
-                .values()
-                .all(|locations| !locations.is_empty()));
-        }
-    }
-
-    #[test]
-    fn frequency_respects_min_count() {
-        let mut engine = build_engine(
-            vec![vec!["a", "b"], vec!["a", "c"]],
-            SelectionMethod::Frequency,
-            2,
-        );
-        let status = engine.step_internal(None);
-        assert!(matches!(status, StepStatus::NoCandidate));
-    }
-
-    #[test]
-    fn empty_or_single_token_corpus_has_no_candidate() {
-        let mut empty_engine = build_engine(vec![], SelectionMethod::Frequency, 0);
-        assert!(matches!(
-            empty_engine.step_internal(None),
-            StepStatus::NoCandidate
-        ));
-
-        let mut single_engine = build_engine(vec![vec!["a"]], SelectionMethod::Frequency, 0);
-        assert!(matches!(
-            single_engine.step_internal(None),
-            StepStatus::NoCandidate
-        ));
-    }
-
-    #[test]
-    fn consecutive_merge_path_is_greedy() {
-        let mut engine = build_engine(
-            vec![vec!["a", "a", "a", "a"]],
-            SelectionMethod::Frequency,
-            0,
-        );
-
-        let StepStatus::Winner(first) = engine.step_internal(None) else {
-            panic!("expected first winner");
-        };
-        assert_eq!(first.clean_locations.len(), 2);
-
-        let StepStatus::Winner(second) = engine.step_internal(None) else {
-            panic!("expected second winner");
-        };
-        assert_eq!(second.winner.merged_lexeme.word, vec!["a", "a", "a", "a"]);
-    }
-
-    #[test]
-    fn scoring_methods_select_winners_on_small_corpus() {
-        let corpus = vec![vec!["a", "b", "a", "b", "c"], vec!["a", "b", "d", "e"]];
-        for method in [
-            SelectionMethod::Frequency,
-            SelectionMethod::LogLikelihood,
-            SelectionMethod::Npmi,
-        ] {
-            let mut engine = build_engine(corpus.clone(), method, 0);
-            assert!(matches!(engine.step_internal(None), StepStatus::Winner(_)));
-        }
     }
 }

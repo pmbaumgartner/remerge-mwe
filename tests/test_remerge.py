@@ -88,7 +88,7 @@ def test_output(tmp_path):
 
 
 @pytest.mark.fast
-def test_output_writes_each_iteration_with_cumulative_content(monkeypatch, tmp_path):
+def test_output_writes_once_by_default(monkeypatch, tmp_path):
     output = tmp_path / "tmp.json"
     corpus = [["a", "a", "a", "a"]]
     writes = []
@@ -102,6 +102,35 @@ def test_output_writes_each_iteration_with_cumulative_content(monkeypatch, tmp_p
     monkeypatch.setattr(Path, "write_text", _capture_write)
     winners = run(corpus, 2, output=output, progress_bar="none")
 
+    assert len(writes) == 1
+    expected = {str(j): list(w.merged_lexeme.word) for j, w in enumerate(winners)}
+    assert json.loads(writes[0]) == expected
+    assert json.loads(output.read_text()) == expected
+
+
+@pytest.mark.fast
+def test_output_debug_writes_each_iteration_with_cumulative_content(
+    monkeypatch, tmp_path
+):
+    output = tmp_path / "tmp.json"
+    corpus = [["a", "a", "a", "a"]]
+    writes = []
+    original_write_text = Path.write_text
+
+    def _capture_write(path_obj, text, *args, **kwargs):
+        if path_obj == output:
+            writes.append(text)
+        return original_write_text(path_obj, text, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", _capture_write)
+    winners = run(
+        corpus,
+        2,
+        output=output,
+        output_debug_each_iteration=True,
+        progress_bar="none",
+    )
+
     assert len(writes) == len(winners)
     for i, payload in enumerate(writes):
         decoded = json.loads(payload)
@@ -109,7 +138,6 @@ def test_output_writes_each_iteration_with_cumulative_content(monkeypatch, tmp_p
             str(j): list(w.merged_lexeme.word) for j, w in enumerate(winners[: i + 1])
         }
         assert decoded == expected
-    assert json.loads(output.read_text()) == json.loads(writes[-1])
 
 
 @pytest.mark.fast

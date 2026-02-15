@@ -9,11 +9,10 @@ StepPayload = tuple[
     list[str],
     int,
     list[tuple[int, int]],
-    list[tuple[int, int]],
 ]
 
-StepOutcome = tuple[str, Optional[StepPayload], Optional[float]]
-
+ProgressPayload = tuple[int, float, list[str]]
+RunOutcome = tuple[str, list[StepPayload], Optional[float], int, list[ProgressPayload]]
 
 class Engine:
     def __init__(
@@ -24,4 +23,9 @@ class Engine:
         tie_breaker: str,
     ) -> None: ...
     def corpus_length(self) -> int: ...
-    def step(self, min_score: Optional[float] = None) -> StepOutcome: ...
+    def run(
+        self,
+        iterations: int,
+        min_score: Optional[float] = None,
+        return_progress: bool = False,
+    ) -> RunOutcome: ...
