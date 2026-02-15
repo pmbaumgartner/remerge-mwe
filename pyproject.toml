@@ -1,28 +1,30 @@
-[tool.poetry]
+[project]
 name = "remerge-mwe"
 version = "0.2.1"
 description = "REMERGE is a Multi-Word Expression (MWE) discovery algorithm derived from the MERGE algorithm."
-authors = ["Peter Baumgartner <5107405+pmbaumgartner@users.noreply.github.com>"]
+authors = [{name = "Peter Baumgartner", email = "5107405+pmbaumgartner@users.noreply.github.com"}]
 readme = "README.md"
-packages = [{include = "remerge", from = "src"}]
 license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "tqdm>=4.64.1,<5",
+    "numpy>=2,<3",
+]
 
-[tool.poetry.dependencies]
-python = "^3.8"
-tqdm = "^4.64.1"
-numpy = ">=1.18,<1.23"
+[dependency-groups]
+dev = [
+    "pytest>=7.1.3,<8",
+    "ipython>=8.5.0,<9",
+    "ruff>=0.9,<1",
+    "ty>=0.0.1a16",
+    "py-spy>=0.3.14,<0.4",
+    "pytest-sugar>=0.9.5,<0.10",
+    "pytest-cov>=4.0.0,<5",
+]
 
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^7.1.3"
-ipython = "^8.5.0"
-black = "^22.8.0"
-flake8 = "^5.0.4"
-py-spy = "^0.3.14"
-pytest-sugar = "^0.9.5"
-pytest-cov = "^4.0.0"
-mypy = "^0.982"
+[tool.hatch.build.targets.wheel]
+packages = ["src/remerge"]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"

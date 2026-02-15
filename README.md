@@ -66,6 +66,34 @@ For latest from github:
 pip install git+https://github.com/pmbaumgartner/remerge-mwe.git 
 ```
 
+#### Development
+
+Use [`uv`](https://github.com/astral-sh/uv) for local project and dependency management.
+
+Create/sync the environment with all dependency groups:
+
+```bash
+uv sync --all-groups
+```
+
+Run tests:
+
+```bash
+uv run pytest -v
+```
+
+Add a runtime dependency:
+
+```bash
+uv add <pkg>
+```
+
+Add a development dependency:
+
+```bash
+uv add --dev <pkg>
+```
+
 #### How it works
 
 The algorithm operates iteratively in two stages: first, it collects all bigrams of co-occurring `lexemes` in the corpus. A measure is calculated on the set of all bigrams to determine a winner. The two lexemes that comprise the winning bigram are merged into a single lexeme. Instances of that bigram (`lexeme` pair) in the corpus are replaced with the merged lexeme. Outdated bigrams, i.e. those that don't exist anymore because one of their elements is now a merged lexeme, are subtracted from the bigram data. New bigrams, i.e. those where one element is now a merged lexeme, are added to the bigram data. With this new set of bigram data, the process repeats and a new winner is selected.

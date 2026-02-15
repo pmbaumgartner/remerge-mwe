@@ -21,7 +21,7 @@ def test_single_iter(sample_corpus):
 def test_consecutive_single():
     """The point of this test is to make sure that the greedy bigram merge is occuring correctly
     and the algorithm does not try to merge the middle bigram here."""
-    corpus = ["a a a a".split()]
+    corpus = [["a", "a", "a", "a"]]
     winners = run(corpus, 2)
     assert winners[0].merge_token_count == 2  # count == 3 is incorrect
     assert winners[1].merged_lexeme == Lexeme(("a", "a", "a", "a"), 0)
@@ -30,7 +30,7 @@ def test_consecutive_single():
 def test_consecutive_remainder():
     """The point of this test is to make sure that the greedy bigram merge is occuring correctly
     and the algorithm does not try to merge the trailing bigram"""
-    corpus = ["c a b a b a b d".split()]
+    corpus = [["c", "a", "b", "a", "b", "a", "b", "d"]]
     winners = run(corpus, 2, method="frequency")
     assert winners[0].merge_token_count == 3
     assert winners[1].merge_token_count == 1

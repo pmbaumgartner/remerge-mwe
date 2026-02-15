@@ -1,8 +1,6 @@
 import json
 from collections import Counter, defaultdict
-from copy import deepcopy
 from dataclasses import dataclass, field
-from enum import Enum
 from functools import cached_property
 from itertools import groupby, islice
 from pathlib import Path
@@ -219,7 +217,10 @@ def merge_winner(
     for line_ix, lexemes in old_bigrams_lookup.items():
 
         old_bigrams = list(
-            zip([l[1] for l in lexemes], islice([l[1] for l in lexemes], 1, None))
+            zip(
+                [lexeme_item[1] for lexeme_item in lexemes],
+                islice([lexeme_item[1] for lexeme_item in lexemes], 1, None),
+            )
         )
 
         new_root_lexemes_items = list(
@@ -338,7 +339,7 @@ def calculate_winner_frequency(bigrams: BigramData, min_count: int = 0) -> Bigra
     return bigrams.bigrams_to_freqs.most_common(1)[0][0]
 
 
-def _calculate_npmi(data: BigramFreqArrays) -> npt.NDArray[np.float_]:
+def _calculate_npmi(data: BigramFreqArrays) -> npt.NDArray[np.float64]:
     prob_ab = data.bigram_freq_array / data.bigram_count
     prob_a = data.el1_freq_array / data.bigram_count
     prob_b = data.el2_freq_array / data.bigram_count
@@ -346,7 +347,7 @@ def _calculate_npmi(data: BigramFreqArrays) -> npt.NDArray[np.float_]:
     return npmi
 
 
-def _calculate_log_likelihood(data: BigramFreqArrays) -> npt.NDArray[np.float_]:
+def _calculate_log_likelihood(data: BigramFreqArrays) -> npt.NDArray[np.float64]:
     # For reference, see also: nltk.collocations.BigramAssocMeasures, specifically _contingency
     # http://ecologyandevolution.org/statsdocs/online-stats-manual-chapter4.html
     obsA = data.bigram_freq_array

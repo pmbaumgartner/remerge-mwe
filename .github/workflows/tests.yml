@@ -1,5 +1,3 @@
-# https://jacobian.org/til/github-actions-poetry/
-
 on:
   push:
     branches: [main]
@@ -9,29 +7,17 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
         with:
           lfs: true
-      - uses: actions/setup-python@v2
+      - uses: actions/setup-python@v5
         with:
-          python-version: 3.9
-      - name: cache poetry install
-        uses: actions/cache@v2
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v4
+      - name: cache uv
+        uses: actions/cache@v4
         with:
-          path: ~/.local
-          key: poetry-1.2.1-0
-      - uses: snok/install-poetry@v1
-        with:
-          version: 1.2.1
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-      - name: cache deps
-        id: cache-deps
-        uses: actions/cache@v2
-        with:
-          path: .venv
-          key: pydeps-${{ hashFiles('**/poetry.lock') }}
-      - run: poetry install --no-interaction --no-root
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-      - run: poetry install --no-interaction
-      - run: poetry run pytest -v
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-py312-${{ hashFiles('**/uv.lock') }}
+      - run: uv sync --all-groups --frozen
+      - run: uv run pytest -v
