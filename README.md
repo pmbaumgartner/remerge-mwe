@@ -133,6 +133,42 @@ cargo clean
 cargo test
 ```
 
+#### Releasing
+
+Releases are automated with GitHub Actions in
+`.github/workflows/release.yml`.
+
+1. Update both version fields to the same value:
+   - `pyproject.toml` -> `[project].version`
+   - `Cargo.toml` -> `[package].version`
+2. Commit and push to `main`.
+3. Create and push a release tag matching that version:
+
+```bash
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+4. Verify the `Release` workflow completes successfully:
+   - wheels built for Linux/macOS/Windows
+   - sdist built
+   - smoke test + `twine check` pass
+   - publish job succeeds
+5. Confirm artifacts on PyPI:
+   - https://pypi.org/project/remerge-mwe/
+
+Manual dry-run/backfill:
+- Trigger `Release` via `workflow_dispatch`.
+- Leave `publish=false` for build/validation only.
+- Set `publish=true` and `release_tag=vX.Y.Z` only when you intend to upload.
+
+Trusted Publisher (PyPI OIDC) setup:
+1. In PyPI project settings for `remerge-mwe`, add a Trusted Publisher.
+2. Set owner/repo to this GitHub repository.
+3. Set workflow file to `release.yml`.
+4. If using GitHub environments, set environment to `pypi`.
+5. In GitHub, optionally add protection rules/required reviewers for the `pypi` environment.
+
 #### Rust/PyO3 Backlog
 
 Planned follow-up after stabilization: split into a pure Rust core crate plus a thin

@@ -1,0 +1,201 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to PyPI (manual runs only)"
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: "Release tag to validate against, e.g. v0.2.2 (required for manual publish)"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-wheels:
+    name: Build wheel (${{ matrix.os }}, ${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os: linux
+            target: x86_64
+          - runner: ubuntu-latest
+            os: linux
+            target: aarch64
+          - runner: macos-13
+            os: macos
+            target: x86_64
+          - runner: macos-14
+            os: macos
+            target: aarch64
+          - runner: windows-latest
+            os: windows
+            target: x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheel (linux)
+        if: matrix.os == 'linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          args: --release --out dist --find-interpreter
+          sccache: "true"
+
+      - name: Build wheel (non-linux)
+        if: matrix.os != 'linux'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --find-interpreter
+          sccache: "true"
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  build-sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build source distribution
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - name: Upload sdist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  validate-artifacts:
+    name: Validate wheel and sdist artifacts
+    needs:
+      - build-wheels
+      - build-sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download sdist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: Smoke test wheel install
+        run: |
+          python -m pip install --upgrade pip twine
+          pip install --no-index --find-links dist remerge-mwe
+          python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency', progress_bar='none')[0].merged_lexeme.word == ('a', 'b')"
+
+      - name: Check package metadata
+        run: twine check dist/*
+
+  publish:
+    name: Publish to PyPI
+    if: github.event_name == 'push' || github.event.inputs.publish == 'true'
+    needs:
+      - validate-artifacts
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.release_tag || github.ref }}
+
+      - name: Validate versions and release tag
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          pyproject = tomllib.loads(Path("pyproject.toml").read_text())
+          cargo = tomllib.loads(Path("Cargo.toml").read_text())
+
+          py_version = pyproject["project"]["version"]
+          cargo_version = cargo["package"]["version"]
+          if py_version != cargo_version:
+            raise SystemExit(
+              f"Version mismatch: pyproject.toml={py_version}, Cargo.toml={cargo_version}"
+            )
+
+          event_name = os.environ["GITHUB_EVENT_NAME"]
+          ref_name = os.environ.get("GITHUB_REF_NAME", "")
+          manual_tag = os.environ.get("RELEASE_TAG", "").strip()
+
+          expected = ""
+          if event_name == "push":
+            if not ref_name.startswith("v"):
+              raise SystemExit(f"Expected tag ref like vX.Y.Z, got: {ref_name}")
+            expected = ref_name[1:]
+          elif os.environ.get("PUBLISH_MANUAL") == "true":
+            if not manual_tag:
+              raise SystemExit("Manual publish requires release_tag input (e.g. v0.2.2).")
+            expected = manual_tag[1:] if manual_tag.startswith("v") else manual_tag
+
+          if expected and py_version != expected:
+            raise SystemExit(
+              f"Tag/version mismatch: expected {expected}, found {py_version}"
+            )
+
+          print(f"Version check OK: {py_version}")
+          PY
+        env:
+          PUBLISH_MANUAL: ${{ github.event.inputs.publish }}
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+
+      - name: Download wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download sdist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: sdist
+          path: dist
+
+      - name: Publish packages to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
