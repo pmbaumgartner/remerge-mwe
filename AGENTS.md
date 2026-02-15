@@ -11,9 +11,9 @@
 2. If dependency constraints changed in `pyproject.toml`, refresh lock + sync:
    - `uv lock`
    - `uv sync --all-groups --frozen`
-3. After code changes, run quality checks:
+3. After code changes, run quality checks (formatting first):
+   - `uv run ruff format src tests`
    - `uv run ruff check src tests`
    - `uv run ty check src tests`
 4. Run tests before finishing:
    - `uv run pytest -v`
-

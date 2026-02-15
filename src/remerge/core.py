@@ -6,13 +6,15 @@ from functools import cached_property
 from itertools import groupby, islice
 from pathlib import Path
 from collections.abc import Callable, Iterable, Sized
-from typing import Literal, NamedTuple, NewType, TypeVar
+from typing import Literal, NewType, TypeVar
 
 import numpy as np
 import numpy.typing as npt
 from tqdm import tqdm, trange
 
 _SMALL = 1e-10
+_SCORE_ATOL = 1e-12
+_SCORE_RTOL = 1e-12
 
 
 class SelectionMethod(str, Enum):
@@ -35,7 +37,8 @@ class NoCandidateBigramError(ValueError):
     """Raised when no candidate bigrams are available for selection."""
 
 
-class Lexeme(NamedTuple):
+@dataclass(frozen=True, slots=True)
+class Lexeme:
     word: tuple[str, ...]
     ix: int
 
@@ -152,7 +155,7 @@ class BigramData:
         self.bigrams_to_freqs.update(bigrams)
 
 
-@dataclass
+@dataclass(frozen=True)
 class WinnerInfo:
     bigram: Bigram
     merged_lexeme: Lexeme
@@ -201,6 +204,12 @@ def merge_winner(
 ) -> tuple[LexemeData, BigramData]:
     clean_locations = winner.cleaned_bigram_locations
     bigram_lines = {line_ix for line_ix, _ in clean_locations}
+    touched_lexemes: set[Lexeme] = {
+        winner.merged_lexeme,
+        winner.bigram[0],
+        winner.bigram[1],
+    }
+    touched_bigrams: set[Bigram] = {winner.bigram}
     old_bigrams_lookup = {
         line_ix: list(lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items())
         for line_ix in bigram_lines
@@ -209,6 +218,7 @@ def merge_winner(
         for lexeme_index in range(winner.n_lexemes):
             pos = TokenIndex(word_ix + lexeme_index)
             old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
+            touched_lexemes.add(old_lexeme)
             lexeme = Lexeme(word=winner.merged_lexeme.word, ix=lexeme_index)
             lexeme_data.locations_to_lexemes[line_ix][pos] = lexeme
             lexeme_data.lexemes_to_locations[old_lexeme].remove((line_ix, pos))
@@ -217,12 +227,14 @@ def merge_winner(
     for line_ix, lexemes in old_bigrams_lookup.items():
         old_root_lexemes = [lexeme_item[1] for lexeme_item in lexemes]
         old_bigrams = list(zip(old_root_lexemes, islice(old_root_lexemes, 1, None)))
+        touched_bigrams.update(old_bigrams)
 
         new_root_lexemes_items = list(
             lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items()
         )
         new_root_lexemes = [lex for _, lex in new_root_lexemes_items]
         new_bigrams = list(zip(new_root_lexemes, islice(new_root_lexemes, 1, None)))
+        touched_bigrams.update(new_bigrams)
 
         bigram_data.bigrams_to_freqs.update(new_bigrams)
         bigram_data.left_lex_freqs.update([b[0] for b in new_bigrams])
@@ -253,30 +265,32 @@ def merge_winner(
     el2_freq = lexeme_data.lexemes_to_freqs[winner.bigram[1]]
     lexeme_data.lexemes_to_freqs[winner.bigram[1]] = el2_freq - merge_token_count
 
-    lexeme_data.lexemes_to_freqs = {
-        k: v for k, v in lexeme_data.lexemes_to_freqs.items() if v != 0
-    }
-    lexeme_data.lexemes_to_locations = defaultdict(
-        set, {k: v for k, v in lexeme_data.lexemes_to_locations.items() if v}
-    )
+    for lexeme in touched_lexemes:
+        if lexeme_data.lexemes_to_freqs.get(lexeme, 0) <= 0:
+            lexeme_data.lexemes_to_freqs.pop(lexeme, None)
+        if not lexeme_data.lexemes_to_locations.get(lexeme):
+            lexeme_data.lexemes_to_locations.pop(lexeme, None)
 
-    bigram_data.bigrams_to_freqs = Counter(
-        {k: v for k, v in bigram_data.bigrams_to_freqs.items() if v > 0}
-    )
-    bigram_data.left_lex_freqs = Counter(
-        {k: v for k, v in bigram_data.left_lex_freqs.items() if v > 0}
-    )
-    bigram_data.right_lex_freqs = Counter(
-        {k: v for k, v in bigram_data.right_lex_freqs.items() if v > 0}
-    )
-    bigram_data.bigrams_to_locations = defaultdict(
-        set, {k: v for k, v in bigram_data.bigrams_to_locations.items() if v}
-    )
+    touched_lr_lexemes: set[Lexeme] = set()
+    for left, right in touched_bigrams:
+        touched_lr_lexemes.add(left)
+        touched_lr_lexemes.add(right)
+        if bigram_data.bigrams_to_freqs.get((left, right), 0) <= 0:
+            bigram_data.bigrams_to_freqs.pop((left, right), None)
+        if not bigram_data.bigrams_to_locations.get((left, right)):
+            bigram_data.bigrams_to_locations.pop((left, right), None)
+
+    for lexeme in touched_lr_lexemes:
+        if bigram_data.left_lex_freqs.get(lexeme, 0) <= 0:
+            bigram_data.left_lex_freqs.pop(lexeme, None)
+        if bigram_data.right_lex_freqs.get(lexeme, 0) <= 0:
+            bigram_data.right_lex_freqs.pop(lexeme, None)
+
     assert winner.bigram not in bigram_data.bigrams_to_freqs
     return lexeme_data, bigram_data
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class BigramCandidateArrays:
     bigram_index: list[Bigram]
     bigram_freq_array: npt.NDArray[np.int64]
@@ -318,7 +332,7 @@ class BigramCandidateArrays:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ScoredBigram:
     bigram: Bigram
     score: float
@@ -469,20 +483,31 @@ def _select_candidate(
     if not candidates:
         return None
 
+    def _scores_close(a: float, b: float) -> bool:
+        return abs(a - b) <= (_SCORE_ATOL + _SCORE_RTOL * abs(b))
+
     max_score = max(candidate.score for candidate in candidates)
     if tie_breaker is TieBreaker.legacy_first_seen:
         for candidate in candidates:
-            if np.isclose(candidate.score, max_score, atol=1e-12, rtol=1e-12):
+            if _scores_close(candidate.score, max_score):
                 return candidate
         return None
 
-    top_score_candidates = [
-        candidate
-        for candidate in candidates
-        if np.isclose(candidate.score, max_score, atol=1e-12, rtol=1e-12)
-    ]
-    top_score_candidates.sort(key=lambda c: (-c.frequency, c.merged_word))
-    return top_score_candidates[0] if top_score_candidates else None
+    best_candidate: ScoredBigram | None = None
+    best_key: tuple[int, tuple[str, ...]] | None = None
+    for candidate in candidates:
+        if not _scores_close(candidate.score, max_score):
+            continue
+        candidate_key = (-candidate.frequency, candidate.merged_word)
+        if best_candidate is None:
+            best_candidate = candidate
+            best_key = candidate_key
+            continue
+        assert best_key is not None
+        if candidate_key < best_key:
+            best_candidate = candidate
+            best_key = candidate_key
+    return best_candidate
 
 
 def run(
