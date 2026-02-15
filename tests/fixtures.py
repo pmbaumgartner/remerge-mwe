@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import List
 
 import pytest
 
@@ -17,12 +16,12 @@ def sample_corpus():
 
     Note that these are dialogue corpuses, so each line is often referred to as a `turn`. They've also been pre-processed with lowercasing, and punctuation replaced with alphanumeric substitutions (`_` --> `undrscr`).
     """
-    corpus: List[List[str]] = []
+    corpus: list[list[str]] = []
     this_folder = Path(__file__).parent
     txt_files = sorted((this_folder / Path("sample_corpus/")).glob("*.TXT"))
     for txt_file in txt_files:
         for line in txt_file.read_text().split("\n"):
             if line:
-                tokens: List[str] = line.split(" ")
+                tokens: list[str] = line.split(" ")
                 corpus.append(tokens)
     return corpus

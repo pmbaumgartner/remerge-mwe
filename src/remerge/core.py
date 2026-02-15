@@ -5,10 +5,8 @@ from enum import Enum
 from functools import cached_property
 from itertools import groupby, islice
 from pathlib import Path
-from typing import Callable
-from typing import Counter as CounterType
-from typing import DefaultDict, Dict, Iterable, List, Literal, NamedTuple, NewType, Optional
-from typing import Set, Sized, Tuple, TypeVar
+from collections.abc import Callable, Iterable, Sized
+from typing import Literal, NamedTuple, NewType, TypeVar
 
 import numpy as np
 import numpy.typing as npt
@@ -38,7 +36,7 @@ class NoCandidateBigramError(ValueError):
 
 
 class Lexeme(NamedTuple):
-    word: Tuple[str, ...]
+    word: tuple[str, ...]
     ix: int
 
     def __repr__(self) -> str:
@@ -51,18 +49,18 @@ TokenIndex = NewType("TokenIndex", int)
 
 @dataclass
 class LexemeData:
-    lexemes_to_locations: DefaultDict[
-        Lexeme, Set[Tuple[LineIndex, TokenIndex]]
+    lexemes_to_locations: defaultdict[
+        Lexeme, set[tuple[LineIndex, TokenIndex]]
     ] = field(default_factory=lambda: defaultdict(set))
-    locations_to_lexemes: List[List[Lexeme]] = field(default_factory=list)
-    lexemes_to_freqs: Dict[Lexeme, int] = field(default_factory=dict)
+    locations_to_lexemes: list[list[Lexeme]] = field(default_factory=list)
+    lexemes_to_freqs: dict[Lexeme, int] = field(default_factory=dict)
 
     @classmethod
     def from_corpus(
         cls, corpus: Iterable[Iterable[str]], progress_bar: bool = False
     ) -> "LexemeData":
         lexeme_data = cls()
-        total: Optional[int] = len(corpus) if isinstance(corpus, Sized) else None
+        total: int | None = len(corpus) if isinstance(corpus, Sized) else None
         corpus_iter = enumerate(corpus)
         if progress_bar:
             corpus_iter = tqdm(
@@ -93,15 +91,15 @@ class LexemeData:
         """Returns number of lines in corpus: max(line_ix) + 1."""
         return len(self.locations_to_lexemes)
 
-    def render_corpus(self) -> List[List[Lexeme]]:
+    def render_corpus(self) -> list[list[Lexeme]]:
         return self.locations_to_lexemes
 
-    def locations_to_root_lexemes(self, line: LineIndex) -> Dict[TokenIndex, Lexeme]:
+    def locations_to_root_lexemes(self, line: LineIndex) -> dict[TokenIndex, Lexeme]:
         lexeme_dicts = self.locations_to_lexemes[line]
         return {TokenIndex(k): v for k, v in enumerate(lexeme_dicts) if v.ix == 0}
 
 
-Bigram = Tuple[Lexeme, Lexeme]
+Bigram = tuple[Lexeme, Lexeme]
 
 
 def _count_bigram_line(*args):
@@ -113,12 +111,12 @@ def _count_bigram_line(*args):
 
 @dataclass
 class BigramData:
-    bigrams_to_freqs: CounterType[Bigram] = field(default_factory=Counter)
-    bigrams_to_locations: Dict[Bigram, Set[Tuple[LineIndex, TokenIndex]]] = field(
+    bigrams_to_freqs: Counter[Bigram] = field(default_factory=Counter)
+    bigrams_to_locations: dict[Bigram, set[tuple[LineIndex, TokenIndex]]] = field(
         default_factory=lambda: defaultdict(set)
     )
-    left_lex_freqs: CounterType[Lexeme] = field(default_factory=Counter)
-    right_lex_freqs: CounterType[Lexeme] = field(default_factory=Counter)
+    left_lex_freqs: Counter[Lexeme] = field(default_factory=Counter)
+    right_lex_freqs: Counter[Lexeme] = field(default_factory=Counter)
 
     @classmethod
     def from_lexemes(
@@ -147,7 +145,7 @@ class BigramData:
             bigram_data.batch_add_bigrams(line_bigrams)
         return bigram_data
 
-    def batch_add_bigrams(self, bigram_locations: List[Bigram]):
+    def batch_add_bigrams(self, bigram_locations: list[Bigram]):
         el1s, el2s, bigrams = _count_bigram_line(*bigram_locations)
         self.left_lex_freqs.update(el1s)
         self.right_lex_freqs.update(el2s)
@@ -158,7 +156,7 @@ class BigramData:
 class WinnerInfo:
     bigram: Bigram
     merged_lexeme: Lexeme
-    bigram_locations: List[Tuple[LineIndex, TokenIndex]]
+    bigram_locations: list[tuple[LineIndex, TokenIndex]]
 
     @classmethod
     def from_bigram_with_data(
@@ -172,11 +170,11 @@ class WinnerInfo:
         return cls(bigram=bigram, merged_lexeme=new_lexeme, bigram_locations=locations)
 
     @cached_property
-    def cleaned_bigram_locations(self) -> Tuple[Tuple[LineIndex, TokenIndex], ...]:
+    def cleaned_bigram_locations(self) -> tuple[tuple[LineIndex, TokenIndex], ...]:
         """Greedily select non-overlapping bigram starts per line."""
-        clean_locations: List[Tuple[LineIndex, TokenIndex]] = []
+        clean_locations: list[tuple[LineIndex, TokenIndex]] = []
         for line, location_group in groupby(self.bigram_locations, key=lambda x: x[0]):
-            exclude_tokens: Set[TokenIndex] = set()
+            exclude_tokens: set[TokenIndex] = set()
             token_ix = [i[1] for i in location_group]
             for token in token_ix:
                 if token in exclude_tokens:
@@ -186,7 +184,7 @@ class WinnerInfo:
                 clean_locations.append((line, token))
         return tuple(clean_locations)
 
-    def clean_bigram_locations(self) -> List[Tuple[LineIndex, TokenIndex]]:
+    def clean_bigram_locations(self) -> list[tuple[LineIndex, TokenIndex]]:
         return list(self.cleaned_bigram_locations)
 
     @property
@@ -200,7 +198,7 @@ class WinnerInfo:
 
 def merge_winner(
     winner: WinnerInfo, lexeme_data: LexemeData, bigram_data: BigramData
-) -> Tuple[LexemeData, BigramData]:
+) -> tuple[LexemeData, BigramData]:
     clean_locations = winner.cleaned_bigram_locations
     bigram_lines = {line_ix for line_ix, _ in clean_locations}
     old_bigrams_lookup = {
@@ -280,7 +278,7 @@ def merge_winner(
 
 @dataclass(frozen=True)
 class BigramCandidateArrays:
-    bigram_index: List[Bigram]
+    bigram_index: list[Bigram]
     bigram_freq_array: npt.NDArray[np.int64]
     el1_freq_array: npt.NDArray[np.int64]
     el2_freq_array: npt.NDArray[np.int64]
@@ -327,7 +325,7 @@ class ScoredBigram:
     frequency: int
 
     @property
-    def merged_word(self) -> Tuple[str, ...]:
+    def merged_word(self) -> tuple[str, ...]:
         return self.bigram[0].word + self.bigram[1].word
 
 
@@ -394,7 +392,7 @@ def _coerce_scores(scores: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
 
 def _as_scored_bigrams(
     data: BigramCandidateArrays, scores: npt.NDArray[np.float64]
-) -> List[ScoredBigram]:
+) -> list[ScoredBigram]:
     safe_scores = _coerce_scores(scores)
     if safe_scores.size == 0 or np.all(safe_scores == -np.inf):
         return []
@@ -412,7 +410,7 @@ def _as_scored_bigrams(
 
 def calculate_candidates_log_likelihood(
     bigram_data: BigramData, min_count: int = 0
-) -> List[ScoredBigram]:
+) -> list[ScoredBigram]:
     data = BigramCandidateArrays.from_bigram_data(bigram_data, min_count=min_count)
     scores = _calculate_log_likelihood(data)
     return _as_scored_bigrams(data, scores)
@@ -420,7 +418,7 @@ def calculate_candidates_log_likelihood(
 
 def calculate_candidates_npmi(
     bigram_data: BigramData, min_count: int = 0
-) -> List[ScoredBigram]:
+) -> list[ScoredBigram]:
     data = BigramCandidateArrays.from_bigram_data(bigram_data, min_count=min_count)
     scores = _calculate_npmi(data)
     return _as_scored_bigrams(data, scores)
@@ -428,7 +426,7 @@ def calculate_candidates_npmi(
 
 def calculate_candidates_frequency(
     bigram_data: BigramData, min_count: int = 0
-) -> List[ScoredBigram]:
+) -> list[ScoredBigram]:
     candidates = []
     for bigram, freq in bigram_data.bigrams_to_freqs.items():
         if freq < min_count:
@@ -439,8 +437,8 @@ def calculate_candidates_frequency(
     return candidates
 
 
-SelectionFunction = Callable[[BigramData, int], List[ScoredBigram]]
-SELECTION_METHODS: Dict[SelectionMethod, SelectionFunction] = {
+SelectionFunction = Callable[[BigramData, int], list[ScoredBigram]]
+SELECTION_METHODS: dict[SelectionMethod, SelectionFunction] = {
     SelectionMethod.log_likelihood: calculate_candidates_log_likelihood,
     SelectionMethod.frequency: calculate_candidates_frequency,
     SelectionMethod.npmi: calculate_candidates_npmi,
@@ -466,8 +464,8 @@ def _coerce_enum(
 
 
 def _select_candidate(
-    candidates: List[ScoredBigram], tie_breaker: TieBreaker
-) -> Optional[ScoredBigram]:
+    candidates: list[ScoredBigram], tie_breaker: TieBreaker
+) -> ScoredBigram | None:
     if not candidates:
         return None
 
@@ -488,27 +486,27 @@ def _select_candidate(
 
 
 def run(
-    corpus: List[List[str]],
+    corpus: list[list[str]],
     iterations: int,
     *,
     method: SelectionMethod | str = SelectionMethod.log_likelihood,
     min_count: int = 0,
-    output: Optional[Path] = None,
+    output: Path | None = None,
     progress_bar: ProgressBarOptions = "iterations",
     tie_breaker: TieBreaker | str = TieBreaker.deterministic,
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
-    min_score: Optional[float] = None,
-) -> List[WinnerInfo]:
+    min_score: float | None = None,
+) -> list[WinnerInfo]:
     """Run the remerge algorithm.
 
     Args:
-        corpus (List[List[str]]): A corpus of already tokenized texts.
+        corpus (list[list[str]]): A corpus of already tokenized texts.
         iterations (int): The number of iterations to run the algorithm.
         method (SelectionMethod | str, optional): One of "frequency", "log_likelihood",
           or "npmi". Defaults to "log_likelihood".
         min_count (int, optional): The minimum count required for a bigram to be included
           in winner calculations. Defaults to 0.
-        output (Optional[Path], optional): A file path to output winners as JSON.
+        output (Path | None, optional): A file path to output winners as JSON.
           Defaults to None.
         progress_bar (ProgressBarOptions, optional): Verbosity of progress bar.
           Defaults to "iterations".
@@ -516,17 +514,17 @@ def run(
           candidates. Defaults to "deterministic".
         on_exhausted (ExhaustionPolicy | str, optional): Behavior when no candidate
           remains. Defaults to "stop".
-        min_score (Optional[float], optional): Stop or raise when the best score is below
+        min_score (float | None, optional): Stop or raise when the best score is below
           this threshold. Defaults to None.
 
     Returns:
-        List[WinnerInfo]: The winning bigram from each executed iteration.
+        list[WinnerInfo]: The winning bigram from each executed iteration.
     """
     method = _coerce_enum(method, SelectionMethod, "method")
     tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
     on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
-    winners: List[WinnerInfo] = []
+    winners: list[WinnerInfo] = []
     all_progress = progress_bar == "all"
     lexemes = LexemeData.from_corpus(corpus, progress_bar=all_progress)
     bigrams = BigramData.from_lexemes(lexemes, progress_bar=all_progress)
