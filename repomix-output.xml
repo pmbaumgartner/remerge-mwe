@@ -67,357 +67,12 @@ Cargo.toml
 CITATION.cff
 explanation.png
 LICENSE
-PYO3_practices.md
 pyproject.toml
 README.md
-REMERGE_improvement_plan.md
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
-
-<file path="PYO3_practices.md">
-## PyO3 + maturin best practices (with real-world patterns from Polars)
-
-This is a practical “how to do it right” guide for building Rust-backed Python packages with **PyO3** (bindings) and **maturin** (build + packaging). It focuses on patterns that scale from tiny extensions to big, performance-sensitive libraries.
-
----
-
-## 1) Design goals that drive good architecture
-
-Before you write code, decide what you’re optimizing for:
-
-* **Fast local iteration** (developers rebuilding constantly)
-* **Easy installs for users** (many prebuilt wheels; minimal toolchain pain)
-* **Performance** (CPU features, minimal copying, low overhead at the boundary)
-* **API stability** (Python users will treat your surface as “the product”)
-* **Portability** (Linux/macOS/Windows, x86_64/aarch64, manylinux/musllinux, etc.)
-
-These choices affect two early forks:
-
-### Fork A: “pure Rust extension” vs “mixed Python + Rust”
-
-maturin explicitly supports both and expects different layouts. In a **pure Rust** layout, maturin will auto-generate a small `__init__.py` so users can `import my_pkg` cleanly, but it also notes that you can’t currently include arbitrary extra package data that way, pushing larger projects toward a mixed layout. ([Maturin][1])
-
-### Fork B: “abi3 wheels” vs “version-specific wheels”
-
-PyO3 documents `abi3` as a way to shrink your wheel matrix (one wheel works across many CPython versions), but it comes with feature/optimization tradeoffs. PyO3 lists several `abi3` limitations (e.g., buffer API not until Python 3.11+, some class options not until 3.9+, and loss of version-specific optimizations). ([PyO3][2])
-
----
-
-## 2) Repository / crate organization patterns that age well
-
-### Pattern 1 (smallest): Single crate = extension module
-
-Good for utilities and small bindings.
-
-* `Cargo.toml` builds a `cdylib`
-* `src/lib.rs` contains your `#[pymodule]`
-* `pyproject.toml` uses maturin as the build backend ([Maturin][3])
-
-Use this when:
-
-* the Python API is thin
-* you don’t need extra Python files beyond the extension
-
-### Pattern 2 (most common): “core Rust crate” + “bindings crate”
-
-This is the default best-practice for anything non-trivial.
-
-* `core/` (pure Rust library, no PyO3 dependency)
-* `python/` (a separate crate that depends on `core` and exposes PyO3 API)
-
-Why this wins:
-
-* you keep Rust logic testable with normal `cargo test`
-* you avoid PyO3 features/env flags interfering with Rust-only tooling
-* you can later add other frontends (CLI, WASM, etc.) without dragging Python concerns everywhere
-
-### Pattern 3 (big-library pattern): “Python base package” + “runtime wheels”
-
-**Polars** uses a sophisticated version of this: the *Python package* (`polars`) is built with setuptools and depends on separate **runtime** wheel packages (e.g., `polars-runtime-32`, optional `polars-runtime-64`, `polars-runtime-compat`). ([GitHub][4])
-
-Why projects do this:
-
-* large native codebases may need multiple runtime variants (CPU features, allocators, compatibility)
-* you can keep the pure-Python layer (docs, typing, helpers) separate from native build concerns
-* releases can validate that versions across the family match (Polars’ CI checks runtime versions against the Python package version). ([GitHub][5])
-
-If you expect CPU-optimized vs compatibility builds, or multiple native components, this pattern is worth considering early.
-
----
-
-## 3) Cargo + PyO3 configuration best practices
-
-### 3.1 `#[pymodule]` name must match the compiled module name
-
-PyO3 is blunt here: the module name should match `lib.name` in `Cargo.toml` so Python can import it without a custom loader. ([PyO3][6])
-
-**Rule of thumb**
-
-* If users do `import my_pkg._native`, then your compiled module name should be `_native`, and your Python package can re-export a friendlier API.
-
-### 3.2 Prefer modern PyO3 linking behavior (avoid “dev pain”)
-
-PyO3 explains that building extension modules should use `PYO3_BUILD_EXTENSION_MODULE` (set automatically by newer maturin / setuptools-rust), and that the older `extension-module` feature caused major problems because it disabled linking broadly (breaking tests/benches). ([PyO3][2])
-
-**Practical guidance**
-
-* If you’re starting fresh: rely on maturin to set the environment correctly.
-* If you must keep `extension-module` for compatibility/history, isolate it to the bindings crate so it doesn’t poison your whole workspace.
-
-(Polars’ runtime crate enables `pyo3`’s `extension-module` alongside `abi3-py39`, `chrono`, and `multiple-pymethods`. ([GitHub][7]))
-
-### 3.3 Choosing abi3: do it deliberately, and document the tradeoff
-
-PyO3’s guide lays out the motivation and the cost: fewer wheels, but fewer optimizations and some missing features depending on minimum Python version. ([PyO3][2])
-
-**A sane policy**
-
-* If your extension is mostly “thin glue” and you care about install simplicity: consider `abi3`.
-* If your extension is performance-critical and benefits from CPython internals / version-specific optimizations: consider version-specific wheels.
-
-Real-world note: Polars has discussed whether `abi3` is worth the performance tradeoff and what it means for their wheel strategy. ([GitHub][8])
-
-### 3.4 Plan for free-threaded Python evolution
-
-PyO3 exposes `#[pyo3(gil_used = true)]` on `#[pymodule]` to declare that the module requires the GIL to run safely under free-threaded Python builds. ([PyO3][6])
-Python’s stable-ABI story for free-threaded builds is actively evolving (see ongoing discussion around stable ABI compatibility for free-threaded builds). ([Discussions on Python.org][9])
-
-**Best practice**
-
-* Keep GIL assumptions explicit in your code and docs
-* Avoid undocumented reliance on CPython internals if you want long-term portability
-
----
-
-## 4) `pyproject.toml` + maturin: clean packaging that tools understand
-
-### 4.1 Always use PEP 517 `pyproject.toml`
-
-The packaging guide strongly recommends a `[build-system]` table so build frontends know how to build your project. ([Python Packaging][10])
-maturin documents the canonical setup: `build-backend = "maturin"` with a version range. ([Maturin][3])
-
-### 4.2 Use `[tool.maturin]` to encode “how we build”
-
-maturin supports configuration keys like:
-
-* `profile` (Cargo profile for normal builds)
-* `editable-profile` (use a faster dev profile for `maturin develop`)
-* `features`, `all-features`, `no-default-features`, etc. ([Maturin][11])
-
-**Practical setup idea**
-
-* `editable-profile = "dev"` for fast local iteration
-* `profile = "release"` (or a custom “dist” profile) for CI wheels
-
-### 4.3 Set an explicit `module-name` for mixed packages
-
-In the plugin ecosystem, you’ll often see a stable internal module path like `package._internal` or `package._lib`.
-
-For example, Polars plugins commonly set `module-name` in `[tool.maturin]`:
-
-* `polars-st` uses `module-name = "polars_st._lib"` and enables `pyo3/extension-module`. ([GitHub][12])
-* `polars-pairing` uses `module-name = "polars_pairing._internal"`. ([GitHub][13])
-
-This lets your Python code control the public API while the native module stays “private”.
-
----
-
-## 5) Development workflow that stays pleasant
-
-### 5.1 Fast local loop: `maturin develop`
-
-Use `maturin develop` for editable installs in a venv. Pair it with maturin’s `editable-profile` setting so you aren’t compiling “full release” constantly. ([Maturin][11])
-
-### 5.2 When builds act weird: inspect PyO3’s detected Python config
-
-PyO3 documents:
-
-* `PYO3_PYTHON` to force the interpreter used for build configuration
-* `PYO3_PRINT_CONFIG=1` to print config and halt (excellent for debugging) ([PyO3][2])
-
-### 5.3 Testing strategy
-
-* Rust unit tests: test core logic in the core crate (no Python involved)
-* Python tests: use `pytest` against the installed package
-* Integration tests: keep them Python-side unless you truly need Rust-driven embedding
-
-Avoid panics crossing the FFI boundary—treat panics as bugs, not control flow (panics create confusing Python exceptions and stack traces in user reports).
-
----
-
-## 6) PyO3 binding patterns that produce clean Python APIs
-
-### 6.1 Keep the boundary small and intentional
-
-A good binding layer does:
-
-* argument parsing / type conversion
-* error translation
-* resource ownership bridging
-* releasing the GIL for heavy work
-
-…and **does not** duplicate your business logic.
-
-### 6.2 Module initialization: explicit exports
-
-Prefer the specific add methods (`add_function`, `add_class`, `add_submodule`) rather than generic attribute setting—PyO3 recommends these for clarity and correctness. ([Mej's Map][14])
-
-### 6.3 Don’t fight Python packaging—wrap your native module
-
-Common pattern:
-
-* native module: `my_pkg._native`
-* Python `__init__.py` re-exports stable public functions/classes
-
-This keeps import semantics stable even if you reorganize Rust code.
-
-### 6.4 Error mapping: make Python errors feel native
-
-Return `PyResult<T>` from all Python-exposed functions and convert Rust error types into appropriate Python exceptions (`ValueError`, `TypeError`, etc.). Users will thank you when tracebacks are actionable.
-
----
-
-## 7) Performance patterns (where most projects leave speed on the table)
-
-### 7.1 Release the GIL around heavy compute
-
-If you do CPU-heavy work, don’t hold the GIL. Structure code so conversion happens quickly, then run compute in Rust, then convert results back.
-
-### 7.2 Minimize copying with “native-friendly” data interchange
-
-If your domain involves arrays / columnar data:
-
-* design APIs that accept buffers/arrays in a form you can view without copying
-* consider Arrow-based interchange when possible
-
-In the Polars ecosystem, `pyo3-polars` provides wrappers like `PySeries` / `PyDataFrame` that implement `FromPyObject` / `IntoPy`, making conversion to/from Python easier and more standardized. ([Docs.rs][15])
-
-### 7.3 Be careful with abi3 + advanced features
-
-If you plan `abi3`, remember PyO3’s “missing features” list (buffer API availability, some class options, etc.). ([PyO3][2])
-For string-heavy APIs, note that real projects track minimum Python versions partly because `abi3` limitations affect what conversions PyO3 can offer cleanly (Polars discusses minimum Python bumps with `abi3` considerations). ([GitHub][16])
-
----
-
-## 8) Builds, wheels, CI: what “good” looks like
-
-### 8.1 Use maturin for wheel builds (and automate it)
-
-maturin’s own docs emphasize it as the “batteries included” way to build and publish PyO3-based packages. ([PyO3][17])
-
-maturin also documents the standard CLI flow (`maturin build` producing wheels in `target/wheels`). ([GitHub][18])
-
-### 8.2 CI matrix: follow established workflows
-
-Polars’ release workflow is a strong reference:
-
-* it builds an sdist for runtime crates with `PyO3/maturin-action@v1`
-* it builds wheels across a large OS/arch matrix
-* it uses custom `RUSTFLAGS` CPU features for different runtime variants (compat vs non-compat)
-* it pins a specific maturin version in CI for repeatability ([GitHub][5])
-
-Even if you don’t copy Polars’ complexity, the meta-lessons are:
-
-* make build decisions explicit (profiles, features, env)
-* validate version consistency automatically
-* test the built wheels, not just the source tree
-
-### 8.3 abi3 wheel correctness matters
-
-If you publish `abi3` wheels, ensure the build configuration and wheel tags actually match what you built. Independent analysis has highlighted how easy it is for tooling to produce mismatched abi3 compatibility signals if you aren’t careful. ([The Trail of Bits Blog][19])
-
----
-
-## 9) Suggested “starter template” (minimal, but scalable)
-
-### Layout (mixed Python + Rust; recommended default)
-
-```text
-my_pkg/
-  pyproject.toml
-  Cargo.toml
-  src/
-    lib.rs                 # Rust extension module crate
-  python/
-    my_pkg/
-      __init__.py          # Re-export public API
-      _version.py
-      py.typed             # if you ship typing markers
-  tests/
-    test_smoke.py
-```
-
-### `pyproject.toml` (maturin backend + explicit module name)
-
-```toml
-[build-system]
-requires = ["maturin>=1.0,<2.0"]
-build-backend = "maturin"
-
-[project]
-name = "my-pkg"
-requires-python = ">=3.10"
-# version can be static here, or dynamic via tooling (pick one policy and stick to it)
-
-[tool.maturin]
-module-name = "my_pkg._native"
-# optional: use cargo profiles strategically
-profile = "release"
-editable-profile = "dev"
-```
-
-### `Cargo.toml` (bindings crate)
-
-```toml
-[package]
-name = "my_pkg_native"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-name = "_native"
-crate-type = ["cdylib"]
-
-[dependencies]
-pyo3 = { version = "0.28", features = ["abi3-py310"] } # or drop abi3 if you want version-specific wheels
-```
-
-### `src/lib.rs` (module definition)
-
-```rust
-use pyo3::prelude::*;
-
-#[pyfunction]
-fn add(a: i64, b: i64) -> i64 {
-    a + b
-}
-
-#[pymodule]
-fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(add, m)?)?;
-    Ok(())
-}
-```
-
-Notes:
-
-* Keep module naming consistent with `lib.name` / `module-name` to avoid import failures. ([PyO3][6])
-* If you choose `abi3`, ensure you understand the feature limitations and test on multiple Python versions. ([PyO3][2])
-
----
-
-## 10) “Ship it” checklist
-
-* Naming: `#[pymodule]` name == `lib.name` (and `module-name` if you use it) ([PyO3][6])
-* You have a mixed layout if you need non-Rust package data (stubs, `py.typed`, schemas, etc.) ([Maturin][1])
-* CI builds wheels on all target platforms and **tests the wheels**
-* If `abi3`: you’ve verified you’re not relying on missing features/optimizations ([PyO3][2])
-* You can debug build detection quickly with `PYO3_PYTHON` / `PYO3_PRINT_CONFIG` ([PyO3][2])
-* Heavy compute releases the GIL and avoids unnecessary copies
-* Panic paths are treated as bugs (not part of the API)
-</file>
 
 <file path="bin/benchmark-remerge.sh">
 #!/usr/bin/env bash
@@ -518,36 +173,6 @@ for label, kwargs in configs:
 PY
 </file>
 
-<file path="src/remerge/_core.pyi">
-from typing import Optional
-
-StepPayload = tuple[
-    float,
-    list[str],
-    int,
-    list[str],
-    int,
-    list[str],
-    int,
-    list[tuple[int, int]],
-    list[tuple[int, int]],
-]
-
-StepOutcome = tuple[str, Optional[StepPayload], Optional[float]]
-
-
-class Engine:
-    def __init__(
-        self,
-        corpus: list[list[str]],
-        method: str,
-        min_count: int,
-        tie_breaker: str,
-    ) -> None: ...
-    def corpus_length(self) -> int: ...
-    def step(self, min_score: Optional[float] = None) -> StepOutcome: ...
-</file>
-
 <file path="tests/__init__.py">
 
 </file>
@@ -560,26 +185,6 @@ __all__ = ["sample_corpus"]
 
 <file path=".gitattributes">
 tests/sample_corpus/* filter=lfs diff=lfs merge=lfs -text
-</file>
-
-<file path="Cargo.toml">
-[package]
-name = "remerge-rs"
-version = "0.2.1"
-edition = "2021"
-
-[lib]
-name = "_core"
-path = "rust/src/lib.rs"
-crate-type = ["cdylib", "rlib"]
-
-[features]
-default = []
-python-extension = ["pyo3/extension-module"]
-
-[dependencies]
-indexmap = "2.12"
-pyo3 = { version = "0.23.5", features = ["abi3-py312"] }
 </file>
 
 <file path="LICENSE">
@@ -606,89 +211,142 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 </file>
 
-<file path="REMERGE_improvement_plan.md">
-# REMERGE Improvement Plan (Balanced Reliability + Algorithm Quality)
+<file path="src/remerge/_core.pyi">
+from typing import Optional
 
-## Summary
-Stabilize correctness first (empty-candidate handling and `min_count` math), then add deterministic extraction controls and targeted algorithm quality improvements, while tightening tests and maintainability. Keep core behavior recognizable but make outcomes reproducible and safer for real corpora.
+StepPayload = tuple[
+    float,
+    list[str],
+    int,
+    list[str],
+    int,
+    list[str],
+    int,
+    list[tuple[int, int]],
+]
 
-## Public API / Interface Changes
-1. Extend `run()` with:
-   - `tie_breaker: Literal["legacy_first_seen", "deterministic"] = "deterministic"`
-   - `on_exhausted: Literal["stop", "raise"] = "stop"`
-   - `min_score: Optional[float] = None` (early-stop threshold on winning score; method-specific interpretation)
-2. Add `NoCandidateBigramError(ValueError)` used when `on_exhausted="raise"` and no valid candidate remains.
-3. Replace `SelectionMethod` alias with `class SelectionMethod(str, Enum)` while continuing to accept equivalent string values for backward compatibility.
+ProgressPayload = tuple[int, float, list[str]]
+RunOutcome = tuple[str, list[StepPayload], Optional[float], int, list[ProgressPayload]]
 
-## Implementation Plan
-1. Correctness foundation
-   - Introduce a unified candidate-building path that returns scored candidates plus global totals from unfiltered bigram stats.
-   - Apply `min_count` only as a candidate inclusion filter.
-   - Ensure LL/NPMI denominator uses full current bigram total, not filtered total.
-   - Make selectors return "no candidate" cleanly instead of throwing from `argmax`/indexing.
-2. Run-loop robustness
-   - In `run()`, handle "no candidate" via `on_exhausted`:
-     - `"stop"`: break loop and return winners collected so far.
-     - `"raise"`: raise `NoCandidateBigramError` with method/min_count context.
-   - Apply `min_score` after selecting the best candidate; if below threshold, stop (or raise if `on_exhausted="raise"`).
-3. Deterministic tie-breaking (algorithm quality + reproducibility)
-   - For equal score, rank by:
-     - higher raw bigram frequency
-     - lexicographic order of concatenated token tuple (stable final tie-break)
-   - Keep `"legacy_first_seen"` for compatibility testing and migration.
-4. Maintainability/performance refactor
-   - Compute `clean_bigram_locations` once per winner and reuse it through merge/update steps.
-   - Change `bigrams_to_locations` value type from `List[...]` to `Set[...]` for O(1)-style removal and easier invariant checks.
-   - Prune empty location entries immediately after updates.
-   - Remove unused imports/types and isolate scoring math into small pure functions.
-5. Test expansion
-   - Add deterministic unit tests for:
-     - empty corpus and single-token corpus
-     - `iterations` greater than available merges
-     - `min_count` filtering behavior across all methods (including frequency)
-     - LL/NPMI denominator correctness with `min_count > 0`
-     - tie resolution under both tie-breaker modes
-     - `on_exhausted` stop vs raise behavior
-     - `min_score` early stopping
-   - Add invariant tests after each merge:
-     - counter totals match location maps
-     - no negative counts
-     - winner bigram removed after merge
-   - Sort fixture corpus file loading for deterministic test input order.
-6. Docs and migration notes
-   - Update README API table/examples for new `run()` options and deterministic default behavior.
-   - Document semantic change: returned winners may be fewer than requested `iterations` when exhausted or thresholded.
-   - Add short "reproducibility" section explaining tie-break choices.
+class Engine:
+    def __init__(
+        self,
+        corpus: list[list[str]],
+        method: str,
+        min_count: int,
+        tie_breaker: str,
+    ) -> None: ...
+    def corpus_length(self) -> int: ...
+    def run(
+        self,
+        iterations: int,
+        min_score: Optional[float] = None,
+        return_progress: bool = False,
+    ) -> RunOutcome: ...
+</file>
 
-## Test Cases and Scenarios
-1. `run([["a"]], 5, on_exhausted="stop")` returns `[]` without error.
-2. Same input with `on_exhausted="raise"` raises `NoCandidateBigramError`.
-3. Frequency method respects `min_count` and excludes low-frequency winners.
-4. NPMI/LL with `min_count` produce finite values and stable rankings using full denominators.
-5. Tie corpus with shuffled line/file order gives identical output under `tie_breaker="deterministic"`.
-6. Existing regression corpus still yields expected first winners unless explicitly changed by deterministic tie policy.
-7. Merge invariants pass across multi-iteration synthetic corpora with repeated/overlapping patterns.
+<file path="tests/test_smoke.py">
+import pytest
 
-## Assumptions and Defaults
-1. Small API additions are acceptable.
-2. Balanced sequencing is preferred: each milestone includes one reliability item and one algorithm-quality item.
-3. Default behavior should favor reproducibility and safety:
-   - `tie_breaker="deterministic"`
-   - `on_exhausted="stop"`
-   - `min_score=None` (disabled unless user sets it)
-4. Discontinuous/gapped bigrams remain out of scope for this iteration.
+from remerge import run
+
+
+@pytest.mark.fast
+def test_minimal_run_smoke() -> None:
+    winners = run([["a", "b", "a", "b"]], 1, method="frequency", progress_bar="none")
+    assert winners
+    assert winners[0].merged_lexeme.word == ("a", "b")
+</file>
+
+<file path="Cargo.toml">
+[package]
+name = "remerge-rs"
+version = "0.2.1"
+edition = "2021"
+
+[lib]
+name = "_core"
+path = "rust/src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+python-extension = ["pyo3/extension-module"]
+
+[dependencies]
+indexmap = "2.12"
+pyo3 = { version = "0.23.5", features = ["abi3-py312"] }
+rayon = "1.10"
+</file>
+
+<file path="CITATION.cff">
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: REMERGE - Multi-Word Expression discovery algorithm
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: ' Peter'
+    family-names: Baumgartner
+identifiers:
+  - type: url
+    value: 'https://doi.org/10.5281/zenodo.7130548'
+    description: >-
+      GitHub repository for REMERGE - Multi-Word
+      Expression discovery algorithm
+repository-code: 'https://github.com/pmbaumgartner/remerge-mwe'
+abstract: >-
+  REMERGE is a Multi-Word Expression (MWE) discovery
+  algorithm, which started as a re-implementation and
+  simplification of a similar algorithm called MERGE,
+  detailed in a publication and Ph.D. thesis[1,2].
+  The primary benefit of this algorithm is that it's
+  non-parametric regarding the size of the n-grams
+  that constitute an MWE—you do not need to specify a
+  priori how many n-grams comprise an MWE—you only
+  need to specify the number of iterations you want
+  the algorithm to run.
+
+  [1] A. Wahl and S. Th. Gries, “Multi-word
+  Expressions: A Novel Computational Approach to
+  Their Bottom-Up Statistical Extraction,” in Lexical
+  Collocation Analysis, P. Cantos-Gómez and M.
+  Almela-Sánchez, Eds. Cham: Springer International
+  Publishing, 2018, pp. 85–109. doi:
+  10.1007/978-3-319-92582-0_5.
+
+  [2] A. Wahl, “The Distributional Learning of
+  Multi-Word Expressions: A Computational Approach,”
+  p. 190.
+keywords:
+  - multiword expressions
+  - corpus linguistics
+  - computational linguistics
+license: MIT
+commit: 6b1a713f156cb0d5abff6866f1889596fd04a3ad
+version: 0.1.1
+date-released: '2022-09-30'
 </file>
 
 <file path="rust/src/lib.rs">
 use indexmap::IndexMap;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 const SMALL: f64 = 1e-10;
 const SCORE_ATOL: f64 = 1e-12;
 const SCORE_RTOL: f64 = 1e-12;
+const FULL_RESCORE_INTERVAL: usize = 25;
+
+type TokenId = u32;
+type Location = (usize, usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectionMethod {
@@ -728,9 +386,49 @@ impl TieBreaker {
     }
 }
 
+#[derive(Default)]
+struct Interner {
+    str_to_id: HashMap<String, TokenId>,
+    id_to_str: Vec<String>,
+}
+
+impl Interner {
+    fn from_corpus(corpus: &[Vec<String>]) -> Self {
+        let mut uniq = HashSet::new();
+        for line in corpus {
+            for token in line {
+                uniq.insert(token.clone());
+            }
+        }
+        let mut sorted = uniq.into_iter().collect::<Vec<_>>();
+        sorted.sort_unstable();
+
+        let mut interner = Self::default();
+        for token in sorted {
+            let id = interner.id_to_str.len() as TokenId;
+            interner.str_to_id.insert(token.clone(), id);
+            interner.id_to_str.push(token);
+        }
+        interner
+    }
+
+    fn id_for(&self, value: &str) -> TokenId {
+        *self
+            .str_to_id
+            .get(value)
+            .expect("token missing in interner while converting corpus")
+    }
+
+    fn ids_to_strings(&self, ids: &[TokenId]) -> Vec<String> {
+        ids.iter()
+            .map(|id| self.id_to_str[*id as usize].clone())
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct Lexeme {
-    word: Vec<String>,
+    word: Vec<TokenId>,
     ix: usize,
 }
 
@@ -742,19 +440,19 @@ struct Bigram {
 
 #[derive(Default)]
 struct LexemeData {
-    lexemes_to_locations: HashMap<Lexeme, HashSet<(usize, usize)>>,
+    lexemes_to_locations: HashMap<Lexeme, HashSet<Location>>,
     locations_to_lexemes: Vec<Vec<Lexeme>>,
     lexemes_to_freqs: HashMap<Lexeme, i64>,
 }
 
 impl LexemeData {
-    fn from_corpus(corpus: &[Vec<String>]) -> Self {
+    fn from_corpus(corpus: &[Vec<TokenId>]) -> Self {
         let mut lexeme_data = Self::default();
         for (line_ix, tokens) in corpus.iter().enumerate() {
             let mut line_lexemes = Vec::with_capacity(tokens.len());
             for (word_ix, word) in tokens.iter().enumerate() {
                 let lexeme = Lexeme {
-                    word: vec![word.clone()],
+                    word: vec![*word],
                     ix: 0,
                 };
                 let loc = (line_ix, word_ix);
@@ -782,7 +480,7 @@ impl LexemeData {
         self.locations_to_lexemes.len()
     }
 
-    fn locations_to_root_lexemes(&self, line_ix: usize) -> Vec<(usize, Lexeme)> {
+    fn root_items_for_line(&self, line_ix: usize) -> Vec<(usize, Lexeme)> {
         self.locations_to_lexemes[line_ix]
             .iter()
             .enumerate()
@@ -795,7 +493,7 @@ impl LexemeData {
 #[derive(Default)]
 struct BigramData {
     bigrams_to_freqs: IndexMap<Bigram, i64>,
-    bigrams_to_locations: HashMap<Bigram, HashSet<(usize, usize)>>,
+    bigrams_to_locations: HashMap<Bigram, HashSet<Location>>,
     left_lex_freqs: HashMap<Lexeme, i64>,
     right_lex_freqs: HashMap<Lexeme, i64>,
 }
@@ -804,35 +502,31 @@ impl BigramData {
     fn from_lexemes(lexeme_data: &LexemeData) -> Self {
         let mut bigram_data = Self::default();
         for line_ix in 0..lexeme_data.corpus_length() {
-            let line_lexeme_data = lexeme_data.locations_to_root_lexemes(line_ix);
-            let mut line_bigrams = Vec::new();
-            for pair in line_lexeme_data.windows(2) {
-                let left_ix = pair[0].0;
-                let left = pair[0].1.clone();
-                let right = pair[1].1.clone();
-                let bigram = Bigram { left, right };
-                let location = (line_ix, left_ix);
+            let root_items = lexeme_data.root_items_for_line(line_ix);
+            for pair in root_items.windows(2) {
+                let bigram = Bigram {
+                    left: pair[0].1.clone(),
+                    right: pair[1].1.clone(),
+                };
+                let location = (line_ix, pair[0].0);
                 bigram_data
                     .bigrams_to_locations
                     .entry(bigram.clone())
                     .or_default()
                     .insert(location);
-                line_bigrams.push(bigram);
+                bigram_data.add_bigram(&bigram, 1);
             }
-            bigram_data.batch_add_bigrams(&line_bigrams);
         }
         bigram_data
     }
 
-    fn batch_add_bigrams(&mut self, bigram_locations: &[Bigram]) {
-        for bigram in bigram_locations {
-            *self.left_lex_freqs.entry(bigram.left.clone()).or_insert(0) += 1;
-            *self
-                .right_lex_freqs
-                .entry(bigram.right.clone())
-                .or_insert(0) += 1;
-            *self.bigrams_to_freqs.entry(bigram.clone()).or_insert(0) += 1;
-        }
+    fn add_bigram(&mut self, bigram: &Bigram, delta: i64) {
+        *self.left_lex_freqs.entry(bigram.left.clone()).or_insert(0) += delta;
+        *self
+            .right_lex_freqs
+            .entry(bigram.right.clone())
+            .or_insert(0) += delta;
+        *self.bigrams_to_freqs.entry(bigram.clone()).or_insert(0) += delta;
     }
 }
 
@@ -840,7 +534,7 @@ impl BigramData {
 struct WinnerInfo {
     bigram: Bigram,
     merged_lexeme: Lexeme,
-    bigram_locations: Vec<(usize, usize)>,
+    bigram_locations: Vec<Location>,
 }
 
 impl WinnerInfo {
@@ -872,7 +566,7 @@ impl WinnerInfo {
         self.merged_lexeme.word.len()
     }
 
-    fn cleaned_bigram_locations(&self) -> Vec<(usize, usize)> {
+    fn cleaned_bigram_locations(&self) -> Vec<Location> {
         let mut clean_locations = Vec::new();
         let mut ix = 0;
         while ix < self.bigram_locations.len() {
@@ -902,69 +596,22 @@ impl WinnerInfo {
 }
 
 #[derive(Clone)]
-struct ScoredBigram {
-    bigram: Bigram,
+struct CandidateScore {
     score: f64,
     frequency: i64,
 }
 
-impl ScoredBigram {
-    fn merged_word(&self) -> Vec<String> {
-        let mut merged =
-            Vec::with_capacity(self.bigram.left.word.len() + self.bigram.right.word.len());
-        merged.extend_from_slice(&self.bigram.left.word);
-        merged.extend_from_slice(&self.bigram.right.word);
-        merged
-    }
+#[derive(Clone)]
+struct StepData {
+    score: f64,
+    winner: WinnerInfo,
+    line_hits_count: usize,
 }
 
-struct BigramCandidateData {
-    bigram_index: Vec<Bigram>,
-    bigram_freq_array: Vec<i64>,
-    el1_freq_array: Vec<i64>,
-    el2_freq_array: Vec<i64>,
-    total_bigram_count: i64,
-}
-
-impl BigramCandidateData {
-    fn from_bigram_data(bigram_data: &BigramData, min_count: i64) -> Self {
-        let total_bigram_count = bigram_data.bigrams_to_freqs.values().sum::<i64>();
-        let candidate_items = bigram_data
-            .bigrams_to_freqs
-            .iter()
-            .filter(|(_, freq)| **freq >= min_count)
-            .collect::<Vec<_>>();
-
-        if candidate_items.is_empty() {
-            return Self {
-                bigram_index: Vec::new(),
-                bigram_freq_array: Vec::new(),
-                el1_freq_array: Vec::new(),
-                el2_freq_array: Vec::new(),
-                total_bigram_count,
-            };
-        }
-
-        let mut bigram_index = Vec::with_capacity(candidate_items.len());
-        let mut bigram_freq_array = Vec::with_capacity(candidate_items.len());
-        let mut el1_freq_array = Vec::with_capacity(candidate_items.len());
-        let mut el2_freq_array = Vec::with_capacity(candidate_items.len());
-
-        for (bigram, freq) in candidate_items {
-            bigram_index.push((*bigram).clone());
-            bigram_freq_array.push(*freq);
-            el1_freq_array.push(*bigram_data.left_lex_freqs.get(&bigram.left).unwrap_or(&0));
-            el2_freq_array.push(*bigram_data.right_lex_freqs.get(&bigram.right).unwrap_or(&0));
-        }
-
-        Self {
-            bigram_index,
-            bigram_freq_array,
-            el1_freq_array,
-            el2_freq_array,
-            total_bigram_count,
-        }
-    }
+enum StepStatus {
+    Winner(StepData),
+    NoCandidate,
+    BelowMinScore(f64),
 }
 
 fn safe_ll_term(observed: f64, expected: f64) -> f64 {
@@ -975,135 +622,6 @@ fn safe_ll_term(observed: f64, expected: f64) -> f64 {
     }
 }
 
-fn calculate_npmi(data: &BigramCandidateData) -> Vec<f64> {
-    if data.total_bigram_count == 0 {
-        return Vec::new();
-    }
-
-    let total = data.total_bigram_count as f64;
-    let mut scores = Vec::with_capacity(data.bigram_freq_array.len());
-    for i in 0..data.bigram_freq_array.len() {
-        let prob_ab = data.bigram_freq_array[i] as f64 / total;
-        let prob_a = data.el1_freq_array[i] as f64 / total;
-        let prob_b = data.el2_freq_array[i] as f64 / total;
-
-        let numerator = (prob_ab / (prob_a * prob_b)).ln();
-        let denominator = -(prob_ab.ln());
-        let npmi = if denominator > 0.0 {
-            numerator / denominator
-        } else {
-            f64::NAN
-        };
-
-        let perfect_association =
-            is_close_default(denominator, 0.0) && is_close_default(numerator, 0.0);
-        if perfect_association {
-            scores.push(1.0);
-        } else {
-            scores.push(npmi);
-        }
-    }
-
-    scores
-}
-
-fn calculate_log_likelihood(data: &BigramCandidateData) -> Vec<f64> {
-    if data.total_bigram_count == 0 {
-        return Vec::new();
-    }
-
-    let total = data.total_bigram_count as f64;
-    let mut scores = Vec::with_capacity(data.bigram_freq_array.len());
-
-    for i in 0..data.bigram_freq_array.len() {
-        let obs_a = data.bigram_freq_array[i] as f64;
-        let obs_b = data.el1_freq_array[i] as f64 - obs_a;
-        let obs_c = data.el2_freq_array[i] as f64 - obs_a;
-        let mut obs_d = total - obs_a - obs_b - obs_c;
-        if obs_d < 0.0 {
-            obs_d = 0.0;
-        }
-
-        let exp_a = ((obs_a + obs_b) * (obs_a + obs_c)) / total;
-        let exp_b = ((obs_a + obs_b) * (obs_b + obs_d)) / total;
-        let exp_c = ((obs_c + obs_d) * (obs_a + obs_c)) / total;
-        let exp_d = ((obs_c + obs_d) * (obs_b + obs_d)) / total;
-
-        let ll_a = safe_ll_term(obs_a, exp_a);
-        let ll_b = safe_ll_term(obs_b, exp_b);
-        let ll_c = safe_ll_term(obs_c, exp_c);
-        let ll_d = safe_ll_term(obs_d, exp_d);
-
-        let log_likelihood = 2.0 * (ll_a + ll_b + ll_c + ll_d);
-        if obs_a > exp_a {
-            scores.push(log_likelihood);
-        } else {
-            scores.push(-log_likelihood);
-        }
-    }
-
-    scores
-}
-
-fn coerce_scores(scores: Vec<f64>) -> Vec<f64> {
-    scores
-        .into_iter()
-        .map(|score| {
-            if score.is_finite() {
-                score
-            } else {
-                f64::NEG_INFINITY
-            }
-        })
-        .collect()
-}
-
-fn as_scored_bigrams(data: &BigramCandidateData, scores: Vec<f64>) -> Vec<ScoredBigram> {
-    let safe_scores = coerce_scores(scores);
-    if safe_scores.is_empty() || safe_scores.iter().all(|score| *score == f64::NEG_INFINITY) {
-        return Vec::new();
-    }
-
-    data.bigram_index
-        .iter()
-        .zip(safe_scores.iter())
-        .zip(data.bigram_freq_array.iter())
-        .map(|((bigram, score), freq)| ScoredBigram {
-            bigram: bigram.clone(),
-            score: *score,
-            frequency: *freq,
-        })
-        .collect()
-}
-
-fn calculate_candidates_log_likelihood(
-    bigram_data: &BigramData,
-    min_count: i64,
-) -> Vec<ScoredBigram> {
-    let data = BigramCandidateData::from_bigram_data(bigram_data, min_count);
-    let scores = calculate_log_likelihood(&data);
-    as_scored_bigrams(&data, scores)
-}
-
-fn calculate_candidates_npmi(bigram_data: &BigramData, min_count: i64) -> Vec<ScoredBigram> {
-    let data = BigramCandidateData::from_bigram_data(bigram_data, min_count);
-    let scores = calculate_npmi(&data);
-    as_scored_bigrams(&data, scores)
-}
-
-fn calculate_candidates_frequency(bigram_data: &BigramData, min_count: i64) -> Vec<ScoredBigram> {
-    bigram_data
-        .bigrams_to_freqs
-        .iter()
-        .filter(|(_, freq)| **freq >= min_count)
-        .map(|(bigram, freq)| ScoredBigram {
-            bigram: bigram.clone(),
-            score: *freq as f64,
-            frequency: *freq,
-        })
-        .collect()
-}
-
 fn scores_close(a: f64, b: f64) -> bool {
     (a - b).abs() <= (SCORE_ATOL + SCORE_RTOL * b.abs())
 }
@@ -1112,39 +630,186 @@ fn is_close_default(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-8 + (1e-5 * b.abs())
 }
 
-fn select_candidate(candidates: &[ScoredBigram], tie_breaker: TieBreaker) -> Option<ScoredBigram> {
-    if candidates.is_empty() {
+fn coerce_score(score: f64) -> f64 {
+    if score.is_finite() {
+        score
+    } else {
+        f64::NEG_INFINITY
+    }
+}
+
+fn score_ll_npmi(
+    method: SelectionMethod,
+    bigram_freq: i64,
+    left_freq: i64,
+    right_freq: i64,
+    total_bigram_count: i64,
+) -> f64 {
+    if total_bigram_count == 0 {
+        return f64::NEG_INFINITY;
+    }
+
+    let total = total_bigram_count as f64;
+
+    match method {
+        SelectionMethod::LogLikelihood => {
+            let obs_a = bigram_freq as f64;
+            let obs_b = left_freq as f64 - obs_a;
+            let obs_c = right_freq as f64 - obs_a;
+            let mut obs_d = total - obs_a - obs_b - obs_c;
+            if obs_d < 0.0 {
+                obs_d = 0.0;
+            }
+
+            let exp_a = ((obs_a + obs_b) * (obs_a + obs_c)) / total;
+            let exp_b = ((obs_a + obs_b) * (obs_b + obs_d)) / total;
+            let exp_c = ((obs_c + obs_d) * (obs_a + obs_c)) / total;
+            let exp_d = ((obs_c + obs_d) * (obs_b + obs_d)) / total;
+
+            let ll_a = safe_ll_term(obs_a, exp_a);
+            let ll_b = safe_ll_term(obs_b, exp_b);
+            let ll_c = safe_ll_term(obs_c, exp_c);
+            let ll_d = safe_ll_term(obs_d, exp_d);
+            let ll = 2.0 * (ll_a + ll_b + ll_c + ll_d);
+            coerce_score(if obs_a > exp_a { ll } else { -ll })
+        }
+        SelectionMethod::Npmi => {
+            let prob_ab = bigram_freq as f64 / total;
+            let prob_a = left_freq as f64 / total;
+            let prob_b = right_freq as f64 / total;
+            let numerator = (prob_ab / (prob_a * prob_b)).ln();
+            let denominator = -(prob_ab.ln());
+            let npmi = if denominator > 0.0 {
+                numerator / denominator
+            } else {
+                f64::NAN
+            };
+            let perfect_association =
+                is_close_default(denominator, 0.0) && is_close_default(numerator, 0.0);
+            coerce_score(if perfect_association { 1.0 } else { npmi })
+        }
+        SelectionMethod::Frequency => bigram_freq as f64,
+    }
+}
+
+fn merged_word_ids(bigram: &Bigram) -> Vec<TokenId> {
+    let mut merged = Vec::with_capacity(bigram.left.word.len() + bigram.right.word.len());
+    merged.extend_from_slice(&bigram.left.word);
+    merged.extend_from_slice(&bigram.right.word);
+    merged
+}
+
+fn select_candidate(
+    tie_breaker: TieBreaker,
+    method: SelectionMethod,
+    bigrams_to_freqs: &IndexMap<Bigram, i64>,
+    candidate_scores: &HashMap<Bigram, CandidateScore>,
+    min_count: i64,
+) -> Option<(Bigram, CandidateScore)> {
+    if method == SelectionMethod::Frequency {
+        if tie_breaker == TieBreaker::LegacyFirstSeen {
+            let mut best: Option<(Bigram, CandidateScore)> = None;
+            let mut best_score = f64::NEG_INFINITY;
+            for (bigram, freq) in bigrams_to_freqs {
+                if *freq < min_count {
+                    continue;
+                }
+                let score = *freq as f64;
+                if score > best_score {
+                    best_score = score;
+                    best = Some((
+                        bigram.clone(),
+                        CandidateScore {
+                            score,
+                            frequency: *freq,
+                        },
+                    ));
+                }
+            }
+            return best;
+        }
+
+        let mut best: Option<(Bigram, CandidateScore)> = None;
+        let mut best_key: Option<(Reverse<i64>, Vec<TokenId>)> = None;
+        let mut max_score = f64::NEG_INFINITY;
+
+        for (bigram, freq) in bigrams_to_freqs {
+            if *freq < min_count {
+                continue;
+            }
+            let score = *freq as f64;
+            if score > max_score {
+                max_score = score;
+                best = Some((
+                    bigram.clone(),
+                    CandidateScore {
+                        score,
+                        frequency: *freq,
+                    },
+                ));
+                best_key = Some((Reverse(*freq), merged_word_ids(bigram)));
+                continue;
+            }
+
+            if !scores_close(score, max_score) {
+                continue;
+            }
+
+            let candidate_key = (Reverse(*freq), merged_word_ids(bigram));
+            if let Some(key) = &best_key {
+                if candidate_key < *key {
+                    best = Some((
+                        bigram.clone(),
+                        CandidateScore {
+                            score,
+                            frequency: *freq,
+                        },
+                    ));
+                    best_key = Some(candidate_key);
+                }
+            }
+        }
+
+        return best;
+    }
+
+    if candidate_scores.is_empty() {
         return None;
     }
 
-    let max_score = candidates
-        .iter()
-        .map(|candidate| candidate.score)
+    let max_score = candidate_scores
+        .values()
+        .map(|c| c.score)
         .fold(f64::NEG_INFINITY, f64::max);
 
     if tie_breaker == TieBreaker::LegacyFirstSeen {
-        return candidates
-            .iter()
-            .find(|candidate| scores_close(candidate.score, max_score))
-            .cloned();
+        for (bigram, _) in bigrams_to_freqs {
+            if let Some(candidate) = candidate_scores.get(bigram) {
+                if scores_close(candidate.score, max_score) {
+                    return Some((bigram.clone(), candidate.clone()));
+                }
+            }
+        }
+        return None;
     }
 
-    let mut best_candidate: Option<ScoredBigram> = None;
-    let mut best_key: Option<(Reverse<i64>, Vec<String>)> = None;
+    let mut best: Option<(Bigram, CandidateScore)> = None;
+    let mut best_key: Option<(Reverse<i64>, Vec<TokenId>)> = None;
 
-    for candidate in candidates {
+    for (bigram, candidate) in candidate_scores {
         if !scores_close(candidate.score, max_score) {
             continue;
         }
-        let candidate_key = (Reverse(candidate.frequency), candidate.merged_word());
-        match (&best_candidate, &best_key) {
+
+        let candidate_key = (Reverse(candidate.frequency), merged_word_ids(bigram));
+        match (&best, &best_key) {
             (None, None) => {
-                best_candidate = Some(candidate.clone());
+                best = Some((bigram.clone(), candidate.clone()));
                 best_key = Some(candidate_key);
             }
             (Some(_), Some(key)) => {
                 if candidate_key < *key {
-                    best_candidate = Some(candidate.clone());
+                    best = Some((bigram.clone(), candidate.clone()));
                     best_key = Some(candidate_key);
                 }
             }
@@ -1152,29 +817,19 @@ fn select_candidate(candidates: &[ScoredBigram], tie_breaker: TieBreaker) -> Opt
         }
     }
 
-    best_candidate
-}
-
-fn adjacent_bigrams(lexemes: &[Lexeme]) -> Vec<Bigram> {
-    lexemes
-        .windows(2)
-        .map(|pair| Bigram {
-            left: pair[0].clone(),
-            right: pair[1].clone(),
-        })
-        .collect()
+    best
 }
 
 fn merge_winner(
     winner: &WinnerInfo,
-    clean_locations: &[(usize, usize)],
+    clean_locations: &[Location],
     lexeme_data: &mut LexemeData,
     bigram_data: &mut BigramData,
-) {
-    let bigram_lines = clean_locations
-        .iter()
-        .map(|(line_ix, _)| *line_ix)
-        .collect::<HashSet<_>>();
+) -> HashSet<Bigram> {
+    let mut bigram_lines = HashSet::new();
+    for (line_ix, _) in clean_locations {
+        bigram_lines.insert(*line_ix);
+    }
 
     let mut touched_lexemes = HashSet::new();
     touched_lexemes.insert(winner.merged_lexeme.clone());
@@ -1186,7 +841,7 @@ fn merge_winner(
 
     let mut old_bigrams_lookup: HashMap<usize, Vec<(usize, Lexeme)>> = HashMap::new();
     for line_ix in bigram_lines {
-        old_bigrams_lookup.insert(line_ix, lexeme_data.locations_to_root_lexemes(line_ix));
+        old_bigrams_lookup.insert(line_ix, lexeme_data.root_items_for_line(line_ix));
     }
 
     for (line_ix, word_ix) in clean_locations.iter().copied() {
@@ -1213,72 +868,53 @@ fn merge_winner(
     }
 
     for (line_ix, old_root_items) in old_bigrams_lookup {
-        let old_root_lexemes = old_root_items
-            .iter()
-            .map(|(_, lexeme)| lexeme.clone())
+        let old_bigrams = old_root_items
+            .windows(2)
+            .map(|pair| {
+                (
+                    Bigram {
+                        left: pair[0].1.clone(),
+                        right: pair[1].1.clone(),
+                    },
+                    (line_ix, pair[0].0),
+                )
+            })
             .collect::<Vec<_>>();
-        let old_bigrams = adjacent_bigrams(&old_root_lexemes);
-        for bigram in old_bigrams.iter().cloned() {
-            touched_bigrams.insert(bigram);
-        }
 
-        let new_root_items = lexeme_data.locations_to_root_lexemes(line_ix);
-        let new_root_lexemes = new_root_items
-            .iter()
-            .map(|(_, lexeme)| lexeme.clone())
+        let new_root_items = lexeme_data.root_items_for_line(line_ix);
+        let new_bigrams = new_root_items
+            .windows(2)
+            .map(|pair| {
+                (
+                    Bigram {
+                        left: pair[0].1.clone(),
+                        right: pair[1].1.clone(),
+                    },
+                    (line_ix, pair[0].0),
+                )
+            })
             .collect::<Vec<_>>();
-        let new_bigrams = adjacent_bigrams(&new_root_lexemes);
-        for bigram in new_bigrams.iter().cloned() {
-            touched_bigrams.insert(bigram);
+
+        for (bigram, _) in &old_bigrams {
+            touched_bigrams.insert(bigram.clone());
+        }
+        for (bigram, _) in &new_bigrams {
+            touched_bigrams.insert(bigram.clone());
         }
 
-        for bigram in &new_bigrams {
-            *bigram_data
-                .bigrams_to_freqs
-                .entry(bigram.clone())
-                .or_insert(0) += 1;
-            *bigram_data
-                .left_lex_freqs
-                .entry(bigram.left.clone())
-                .or_insert(0) += 1;
-            *bigram_data
-                .right_lex_freqs
-                .entry(bigram.right.clone())
-                .or_insert(0) += 1;
+        for (bigram, _) in &new_bigrams {
+            bigram_data.add_bigram(bigram, 1);
+        }
+        for (bigram, _) in &old_bigrams {
+            bigram_data.add_bigram(bigram, -1);
         }
 
-        for bigram in &old_bigrams {
-            *bigram_data
-                .bigrams_to_freqs
-                .entry(bigram.clone())
-                .or_insert(0) -= 1;
-            *bigram_data
-                .left_lex_freqs
-                .entry(bigram.left.clone())
-                .or_insert(0) -= 1;
-            *bigram_data
-                .right_lex_freqs
-                .entry(bigram.right.clone())
-                .or_insert(0) -= 1;
-        }
-
-        for pair in old_root_items.windows(2) {
-            let left_ix = pair[0].0;
-            let left = pair[0].1.clone();
-            let right = pair[1].1.clone();
-            let bigram = Bigram { left, right };
-            let location = (line_ix, left_ix);
+        for (bigram, location) in old_bigrams {
             if let Some(locations) = bigram_data.bigrams_to_locations.get_mut(&bigram) {
                 locations.remove(&location);
             }
         }
-
-        for pair in new_root_items.windows(2) {
-            let left_ix = pair[0].0;
-            let left = pair[0].1.clone();
-            let right = pair[1].1.clone();
-            let bigram = Bigram { left, right };
-            let location = (line_ix, left_ix);
+        for (bigram, location) in new_bigrams {
             bigram_data
                 .bigrams_to_locations
                 .entry(bigram)
@@ -1320,26 +956,26 @@ fn merge_winner(
     }
 
     let mut touched_lr_lexemes = HashSet::new();
-    for bigram in touched_bigrams {
+    for bigram in &touched_bigrams {
         touched_lr_lexemes.insert(bigram.left.clone());
         touched_lr_lexemes.insert(bigram.right.clone());
 
         let remove_freq = bigram_data
             .bigrams_to_freqs
-            .get(&bigram)
+            .get(bigram)
             .map(|freq| *freq <= 0)
             .unwrap_or(false);
         if remove_freq {
-            bigram_data.bigrams_to_freqs.shift_remove(&bigram);
+            bigram_data.bigrams_to_freqs.shift_remove(bigram);
         }
 
         let remove_locations = bigram_data
             .bigrams_to_locations
-            .get(&bigram)
+            .get(bigram)
             .map(|locations| locations.is_empty())
             .unwrap_or(true);
         if remove_locations {
-            bigram_data.bigrams_to_locations.remove(&bigram);
+            bigram_data.bigrams_to_locations.remove(bigram);
         }
     }
 
@@ -1363,70 +999,241 @@ fn merge_winner(
         }
     }
 
-    debug_assert!(!bigram_data.bigrams_to_freqs.contains_key(&winner.bigram));
-}
-
-#[derive(Clone)]
-struct StepData {
-    score: f64,
-    winner: WinnerInfo,
-    clean_locations: Vec<(usize, usize)>,
-}
-
-enum StepStatus {
-    Winner(StepData),
-    NoCandidate,
-    BelowMinScore(f64),
+    touched_bigrams
 }
 
 #[pyclass]
 struct Engine {
+    interner: Interner,
     lexemes: LexemeData,
     bigrams: BigramData,
     method: SelectionMethod,
     min_count: i64,
     tie_breaker: TieBreaker,
+    candidate_scores: HashMap<Bigram, CandidateScore>,
+    dirty_bigrams: HashSet<Bigram>,
+    iteration_counter: usize,
 }
 
 impl Engine {
-    fn calculate_candidates(&self) -> Vec<ScoredBigram> {
-        match self.method {
-            SelectionMethod::Frequency => {
-                calculate_candidates_frequency(&self.bigrams, self.min_count)
+    fn refresh_candidate_scores(&mut self, force_full: bool) {
+        if self.method == SelectionMethod::Frequency {
+            return;
+        }
+
+        let full = force_full
+            || self.candidate_scores.is_empty()
+            || self.iteration_counter.is_multiple_of(FULL_RESCORE_INTERVAL);
+
+        let total_bigram_count = self.bigrams.bigrams_to_freqs.values().sum::<i64>();
+
+        if full {
+            let snapshot = self
+                .bigrams
+                .bigrams_to_freqs
+                .iter()
+                .filter(|(_, freq)| **freq >= self.min_count)
+                .map(|(bigram, freq)| {
+                    (
+                        bigram.clone(),
+                        *freq,
+                        *self.bigrams.left_lex_freqs.get(&bigram.left).unwrap_or(&0),
+                        *self
+                            .bigrams
+                            .right_lex_freqs
+                            .get(&bigram.right)
+                            .unwrap_or(&0),
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            let scored = snapshot
+                .par_iter()
+                .map(|(bigram, freq, left_freq, right_freq)| {
+                    (
+                        bigram.clone(),
+                        CandidateScore {
+                            score: score_ll_npmi(
+                                self.method,
+                                *freq,
+                                *left_freq,
+                                *right_freq,
+                                total_bigram_count,
+                            ),
+                            frequency: *freq,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>();
+
+            self.candidate_scores.clear();
+            for (bigram, score) in scored {
+                if score.score > f64::NEG_INFINITY {
+                    self.candidate_scores.insert(bigram, score);
+                }
             }
-            SelectionMethod::LogLikelihood => {
-                calculate_candidates_log_likelihood(&self.bigrams, self.min_count)
+            self.dirty_bigrams.clear();
+            return;
+        }
+
+        let dirty = self.dirty_bigrams.drain().collect::<Vec<_>>();
+        let dirty_snapshot = dirty
+            .into_iter()
+            .map(|bigram| {
+                (
+                    bigram.clone(),
+                    self.bigrams.bigrams_to_freqs.get(&bigram).copied(),
+                    self.bigrams.left_lex_freqs.get(&bigram.left).copied(),
+                    self.bigrams.right_lex_freqs.get(&bigram.right).copied(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let rescored = dirty_snapshot
+            .par_iter()
+            .map(|(bigram, maybe_freq, maybe_left, maybe_right)| {
+                let Some(freq) = maybe_freq else {
+                    return (bigram.clone(), None);
+                };
+                if *freq < self.min_count {
+                    return (bigram.clone(), None);
+                }
+                let left_freq = maybe_left.unwrap_or(0);
+                let right_freq = maybe_right.unwrap_or(0);
+                let score = score_ll_npmi(
+                    self.method,
+                    *freq,
+                    left_freq,
+                    right_freq,
+                    total_bigram_count,
+                );
+                if score == f64::NEG_INFINITY {
+                    (bigram.clone(), None)
+                } else {
+                    (
+                        bigram.clone(),
+                        Some(CandidateScore {
+                            score,
+                            frequency: *freq,
+                        }),
+                    )
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for (bigram, maybe_score) in rescored {
+            if let Some(score) = maybe_score {
+                self.candidate_scores.insert(bigram, score);
+            } else {
+                self.candidate_scores.remove(&bigram);
             }
-            SelectionMethod::Npmi => calculate_candidates_npmi(&self.bigrams, self.min_count),
         }
     }
 
+    fn token_ids_to_strings(&self, token_ids: &[TokenId]) -> Vec<String> {
+        self.interner.ids_to_strings(token_ids)
+    }
+
+    fn step_payload(&self, step_data: StepData) -> StepPayload {
+        (
+            step_data.score,
+            self.token_ids_to_strings(&step_data.winner.bigram.left.word),
+            step_data.winner.bigram.left.ix,
+            self.token_ids_to_strings(&step_data.winner.bigram.right.word),
+            step_data.winner.bigram.right.ix,
+            self.token_ids_to_strings(&step_data.winner.merged_lexeme.word),
+            step_data.winner.merged_lexeme.ix,
+            step_data.winner.bigram_locations,
+        )
+    }
+
     fn step_internal(&mut self, min_score: Option<f64>) -> StepStatus {
-        let candidates = self.calculate_candidates();
-        let Some(selected) = select_candidate(&candidates, self.tie_breaker) else {
+        self.refresh_candidate_scores(false);
+
+        let Some((bigram, candidate)) = select_candidate(
+            self.tie_breaker,
+            self.method,
+            &self.bigrams.bigrams_to_freqs,
+            &self.candidate_scores,
+            self.min_count,
+        ) else {
             return StepStatus::NoCandidate;
         };
 
         if let Some(score_threshold) = min_score {
-            if selected.score < score_threshold {
-                return StepStatus::BelowMinScore(selected.score);
+            if candidate.score < score_threshold {
+                return StepStatus::BelowMinScore(candidate.score);
             }
         }
 
-        let winner = WinnerInfo::from_bigram_with_data(&selected.bigram, &self.bigrams);
+        let winner = WinnerInfo::from_bigram_with_data(&bigram, &self.bigrams);
         let clean_locations = winner.cleaned_bigram_locations();
-        merge_winner(
+        let line_hits_count = clean_locations
+            .iter()
+            .map(|(line_ix, _)| *line_ix)
+            .collect::<HashSet<_>>()
+            .len();
+
+        let touched = merge_winner(
             &winner,
             &clean_locations,
             &mut self.lexemes,
             &mut self.bigrams,
         );
+        self.dirty_bigrams = touched;
+        self.iteration_counter += 1;
 
         StepStatus::Winner(StepData {
-            score: selected.score,
+            score: candidate.score,
             winner,
-            clean_locations,
+            line_hits_count,
         })
+    }
+
+    fn run_internal(
+        &mut self,
+        iterations: usize,
+        min_score: Option<f64>,
+        return_progress: bool,
+    ) -> RunOutcome {
+        let mut winners = Vec::new();
+        let mut progress = Vec::new();
+        let corpus_length = self.lexemes.corpus_length();
+
+        for _ in 0..iterations {
+            match self.step_internal(min_score) {
+                StepStatus::NoCandidate => {
+                    return (
+                        "no_candidate".to_string(),
+                        winners,
+                        None,
+                        corpus_length,
+                        progress,
+                    )
+                }
+                StepStatus::BelowMinScore(score) => {
+                    return (
+                        "below_min_score".to_string(),
+                        winners,
+                        Some(score),
+                        corpus_length,
+                        progress,
+                    )
+                }
+                StepStatus::Winner(step_data) => {
+                    if return_progress {
+                        progress.push((
+                            step_data.line_hits_count,
+                            step_data.score,
+                            self.token_ids_to_strings(&step_data.winner.merged_lexeme.word),
+                        ));
+                    }
+                    winners.push(self.step_payload(step_data));
+                }
+            }
+        }
+
+        ("completed".to_string(), winners, None, corpus_length, progress)
     }
 }
 
@@ -1439,10 +1246,16 @@ type StepPayload = (
     Vec<String>,
     usize,
     Vec<(usize, usize)>,
-    Vec<(usize, usize)>,
 );
 
-type StepOutcome = (String, Option<StepPayload>, Option<f64>);
+type ProgressPayload = (usize, f64, Vec<String>);
+type RunOutcome = (
+    String,
+    Vec<StepPayload>,
+    Option<f64>,
+    usize,
+    Vec<ProgressPayload>,
+);
 
 #[pymethods]
 impl Engine {
@@ -1455,15 +1268,29 @@ impl Engine {
     ) -> PyResult<Self> {
         let method = SelectionMethod::parse(method)?;
         let tie_breaker = TieBreaker::parse(tie_breaker)?;
-        let lexemes = LexemeData::from_corpus(&corpus);
+        let interner = Interner::from_corpus(&corpus);
+        let corpus_ids = corpus
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|token| interner.id_for(token))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let lexemes = LexemeData::from_corpus(&corpus_ids);
         let bigrams = BigramData::from_lexemes(&lexemes);
 
         Ok(Self {
+            interner,
             lexemes,
             bigrams,
             method,
             min_count: min_count as i64,
             tie_breaker,
+            candidate_scores: HashMap::new(),
+            dirty_bigrams: HashSet::new(),
+            iteration_counter: 0,
         })
     }
 
@@ -1471,31 +1298,18 @@ impl Engine {
         self.lexemes.corpus_length()
     }
 
-    #[pyo3(signature = (min_score=None))]
-    fn step(&mut self, py: Python<'_>, min_score: Option<f64>) -> StepOutcome {
-        let step_result = py.allow_threads(|| self.step_internal(min_score));
-        match step_result {
-            StepStatus::NoCandidate => ("no_candidate".to_string(), None, None),
-            StepStatus::BelowMinScore(score) => ("below_min_score".to_string(), None, Some(score)),
-            StepStatus::Winner(step_data) => {
-                let payload = (
-                    step_data.score,
-                    step_data.winner.bigram.left.word,
-                    step_data.winner.bigram.left.ix,
-                    step_data.winner.bigram.right.word,
-                    step_data.winner.bigram.right.ix,
-                    step_data.winner.merged_lexeme.word,
-                    step_data.winner.merged_lexeme.ix,
-                    step_data.winner.bigram_locations,
-                    step_data.clean_locations,
-                );
-                ("winner".to_string(), Some(payload), Some(step_data.score))
-            }
-        }
+    #[pyo3(signature = (iterations, min_score=None, return_progress=false))]
+    fn run(
+        &mut self,
+        py: Python<'_>,
+        iterations: usize,
+        min_score: Option<f64>,
+        return_progress: bool,
+    ) -> RunOutcome {
+        py.allow_threads(|| self.run_internal(iterations, min_score, return_progress))
     }
 }
 
-// This module currently assumes GIL use for Python interaction.
 #[pymodule(gil_used = true)]
 fn _core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Engine>()?;
@@ -1512,15 +1326,38 @@ mod tests {
             .map(|line| line.into_iter().map(str::to_string).collect::<Vec<_>>())
             .collect::<Vec<_>>();
 
-        let lexemes = LexemeData::from_corpus(&corpus);
+        let interner = Interner::from_corpus(&corpus);
+        let corpus_ids = corpus
+            .iter()
+            .map(|line| {
+                line.iter()
+                    .map(|token| interner.id_for(token))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let lexemes = LexemeData::from_corpus(&corpus_ids);
         let bigrams = BigramData::from_lexemes(&lexemes);
+
         Engine {
+            interner,
             lexemes,
             bigrams,
             method,
             min_count,
             tie_breaker: TieBreaker::Deterministic,
+            candidate_scores: HashMap::new(),
+            dirty_bigrams: HashSet::new(),
+            iteration_counter: 0,
         }
+    }
+
+    #[test]
+    fn interner_roundtrip() {
+        let corpus = vec![vec!["b".to_string(), "a".to_string(), "b".to_string()]];
+        let interner = Interner::from_corpus(&corpus);
+        let ids = vec![interner.id_for("a"), interner.id_for("b")];
+        assert_eq!(interner.ids_to_strings(&ids), vec!["a", "b"]);
+        assert!(interner.id_for("a") < interner.id_for("b"));
     }
 
     #[test]
@@ -1538,29 +1375,29 @@ mod tests {
         let StepStatus::Winner(step) = engine.step_internal(None) else {
             panic!("expected winner");
         };
-        assert_eq!(step.winner.merged_lexeme.word, vec!["a", "b"]);
+        let merged = engine.token_ids_to_strings(&step.winner.merged_lexeme.word);
+        assert_eq!(merged, vec!["a", "b"]);
     }
 
     #[test]
-    fn legacy_tie_break_is_first_seen() {
-        let corpus = vec![vec!["c", "d"], vec!["a", "b"]]
-            .into_iter()
-            .map(|line| line.into_iter().map(str::to_string).collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-        let lexemes = LexemeData::from_corpus(&corpus);
-        let bigrams = BigramData::from_lexemes(&lexemes);
-        let mut engine = Engine {
-            lexemes,
-            bigrams,
-            method: SelectionMethod::Frequency,
-            min_count: 0,
-            tie_breaker: TieBreaker::LegacyFirstSeen,
-        };
+    fn engine_run_matches_repeated_step_for_frequency() {
+        let corpus = vec![vec!["a", "a", "a", "a"]];
+        let mut run_engine = build_engine(corpus.clone(), SelectionMethod::Frequency, 0);
+        let mut step_engine = build_engine(corpus, SelectionMethod::Frequency, 0);
 
-        let StepStatus::Winner(step) = engine.step_internal(None) else {
-            panic!("expected winner");
-        };
-        assert_eq!(step.winner.merged_lexeme.word, vec!["c", "d"]);
+        let (_, run_payloads, _, _, _) = run_engine.run_internal(3, None, false);
+
+        let mut step_payloads = Vec::new();
+        for _ in 0..3 {
+            match step_engine.step_internal(None) {
+                StepStatus::Winner(step_data) => {
+                    step_payloads.push(step_engine.step_payload(step_data))
+                }
+                _ => break,
+            }
+        }
+
+        assert_eq!(run_payloads, step_payloads);
     }
 
     #[test]
@@ -1572,121 +1409,7 @@ mod tests {
         };
         assert_eq!(score, 1.0);
     }
-
-    #[test]
-    fn merge_invariants_hold_on_small_corpus() {
-        let mut engine = build_engine(
-            vec![
-                vec!["a", "a", "a", "a"],
-                vec!["c", "a", "b", "a", "b", "a", "b", "d"],
-            ],
-            SelectionMethod::Frequency,
-            0,
-        );
-
-        for _ in 0..8 {
-            let status = engine.step_internal(None);
-            let StepStatus::Winner(step) = status else {
-                break;
-            };
-            assert!(!engine
-                .bigrams
-                .bigrams_to_freqs
-                .contains_key(&step.winner.bigram));
-            assert!(engine
-                .lexemes
-                .lexemes_to_freqs
-                .values()
-                .all(|freq| *freq > 0));
-            assert!(engine
-                .bigrams
-                .bigrams_to_freqs
-                .values()
-                .all(|freq| *freq > 0));
-            assert!(engine
-                .lexemes
-                .lexemes_to_locations
-                .values()
-                .all(|locations| !locations.is_empty()));
-            assert!(engine
-                .bigrams
-                .bigrams_to_locations
-                .values()
-                .all(|locations| !locations.is_empty()));
-        }
-    }
-
-    #[test]
-    fn frequency_respects_min_count() {
-        let mut engine = build_engine(
-            vec![vec!["a", "b"], vec!["a", "c"]],
-            SelectionMethod::Frequency,
-            2,
-        );
-        let status = engine.step_internal(None);
-        assert!(matches!(status, StepStatus::NoCandidate));
-    }
-
-    #[test]
-    fn empty_or_single_token_corpus_has_no_candidate() {
-        let mut empty_engine = build_engine(vec![], SelectionMethod::Frequency, 0);
-        assert!(matches!(
-            empty_engine.step_internal(None),
-            StepStatus::NoCandidate
-        ));
-
-        let mut single_engine = build_engine(vec![vec!["a"]], SelectionMethod::Frequency, 0);
-        assert!(matches!(
-            single_engine.step_internal(None),
-            StepStatus::NoCandidate
-        ));
-    }
-
-    #[test]
-    fn consecutive_merge_path_is_greedy() {
-        let mut engine = build_engine(
-            vec![vec!["a", "a", "a", "a"]],
-            SelectionMethod::Frequency,
-            0,
-        );
-
-        let StepStatus::Winner(first) = engine.step_internal(None) else {
-            panic!("expected first winner");
-        };
-        assert_eq!(first.clean_locations.len(), 2);
-
-        let StepStatus::Winner(second) = engine.step_internal(None) else {
-            panic!("expected second winner");
-        };
-        assert_eq!(second.winner.merged_lexeme.word, vec!["a", "a", "a", "a"]);
-    }
-
-    #[test]
-    fn scoring_methods_select_winners_on_small_corpus() {
-        let corpus = vec![vec!["a", "b", "a", "b", "c"], vec!["a", "b", "d", "e"]];
-        for method in [
-            SelectionMethod::Frequency,
-            SelectionMethod::LogLikelihood,
-            SelectionMethod::Npmi,
-        ] {
-            let mut engine = build_engine(corpus.clone(), method, 0);
-            assert!(matches!(engine.step_internal(None), StepStatus::Winner(_)));
-        }
-    }
 }
-</file>
-
-<file path="tests/test_smoke.py">
-import pytest
-
-from remerge import run
-
-
-@pytest.mark.fast
-def test_minimal_run_smoke() -> None:
-    winners = run([["a", "b", "a", "b"]], 1, method="frequency", progress_bar="none")
-    assert winners
-    assert winners[0].merged_lexeme.word == ("a", "b")
 </file>
 
 <file path=".gitignore">
@@ -1853,59 +1576,7 @@ cython_debug/
 
 scripts/
 *.json
-</file>
-
-<file path="CITATION.cff">
-# This CITATION.cff file was generated with cffinit.
-# Visit https://bit.ly/cffinit to generate yours today!
-
-cff-version: 1.2.0
-title: REMERGE - Multi-Word Expression discovery algorithm
-message: >-
-  If you use this software, please cite it using the
-  metadata from this file.
-type: software
-authors:
-  - given-names: ' Peter'
-    family-names: Baumgartner
-identifiers:
-  - type: url
-    value: 'https://doi.org/10.5281/zenodo.7130548'
-    description: >-
-      GitHub repository for REMERGE - Multi-Word
-      Expression discovery algorithm
-repository-code: 'https://github.com/pmbaumgartner/remerge-mwe'
-abstract: >-
-  REMERGE is a Multi-Word Expression (MWE) discovery
-  algorithm, which started as a re-implementation and
-  simplification of a similar algorithm called MERGE,
-  detailed in a publication and Ph.D. thesis[1,2].
-  The primary benefit of this algorithm is that it's
-  non-parametric regarding the size of the n-grams
-  that constitute an MWE—you do not need to specify a
-  priori how many n-grams comprise an MWE—you only
-  need to specify the number of iterations you want
-  the algorithm to run.
-
-  [1] A. Wahl and S. Th. Gries, “Multi-word
-  Expressions: A Novel Computational Approach to
-  Their Bottom-Up Statistical Extraction,” in Lexical
-  Collocation Analysis, P. Cantos-Gómez and M.
-  Almela-Sánchez, Eds. Cham: Springer International
-  Publishing, 2018, pp. 85–109. doi:
-  10.1007/978-3-319-92582-0_5.
-
-  [2] A. Wahl, “The Distributional Learning of
-  Multi-Word Expressions: A Computational Approach,”
-  p. 190.
-keywords:
-  - multiword expressions
-  - corpus linguistics
-  - computational linguistics
-license: MIT
-commit: 6b1a713f156cb0d5abff6866f1889596fd04a3ad
-version: 0.1.1
-date-released: '2022-09-30'
+.docs/
 </file>
 
 <file path="tests/fixtures.py">
@@ -2208,7 +1879,7 @@ def test_output(tmp_path):
 
 
 @pytest.mark.fast
-def test_output_writes_each_iteration_with_cumulative_content(monkeypatch, tmp_path):
+def test_output_writes_once_by_default(monkeypatch, tmp_path):
     output = tmp_path / "tmp.json"
     corpus = [["a", "a", "a", "a"]]
     writes = []
@@ -2222,6 +1893,35 @@ def test_output_writes_each_iteration_with_cumulative_content(monkeypatch, tmp_p
     monkeypatch.setattr(Path, "write_text", _capture_write)
     winners = run(corpus, 2, output=output, progress_bar="none")
 
+    assert len(writes) == 1
+    expected = {str(j): list(w.merged_lexeme.word) for j, w in enumerate(winners)}
+    assert json.loads(writes[0]) == expected
+    assert json.loads(output.read_text()) == expected
+
+
+@pytest.mark.fast
+def test_output_debug_writes_each_iteration_with_cumulative_content(
+    monkeypatch, tmp_path
+):
+    output = tmp_path / "tmp.json"
+    corpus = [["a", "a", "a", "a"]]
+    writes = []
+    original_write_text = Path.write_text
+
+    def _capture_write(path_obj, text, *args, **kwargs):
+        if path_obj == output:
+            writes.append(text)
+        return original_write_text(path_obj, text, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", _capture_write)
+    winners = run(
+        corpus,
+        2,
+        output=output,
+        output_debug_each_iteration=True,
+        progress_bar="none",
+    )
+
     assert len(writes) == len(winners)
     for i, payload in enumerate(writes):
         decoded = json.loads(payload)
@@ -2229,7 +1929,6 @@ def test_output_writes_each_iteration_with_cumulative_content(monkeypatch, tmp_p
             str(j): list(w.merged_lexeme.word) for j, w in enumerate(winners[: i + 1])
         }
         assert decoded == expected
-    assert json.loads(output.read_text()) == json.loads(writes[-1])
 
 
 @pytest.mark.fast
@@ -2329,220 +2028,6 @@ def test_parity_fixture(sample_corpus):
     for method, expected in parity["tie_deterministic"].items():
         winner = run(tie_corpus, 1, method=method, progress_bar="none")[0]
         assert list(winner.merged_lexeme.word) == expected
-</file>
-
-<file path="src/remerge/core.py">
-import json
-from dataclasses import dataclass
-from enum import Enum
-from functools import cached_property
-from itertools import groupby
-from pathlib import Path
-from typing import Literal, NewType, TypeVar
-
-from tqdm import tqdm, trange
-
-from ._core import Engine
-
-
-class SelectionMethod(str, Enum):
-    frequency = "frequency"
-    log_likelihood = "log_likelihood"
-    npmi = "npmi"
-
-
-class TieBreaker(str, Enum):
-    deterministic = "deterministic"
-    legacy_first_seen = "legacy_first_seen"
-
-
-class ExhaustionPolicy(str, Enum):
-    stop = "stop"
-    raise_ = "raise"
-
-
-class NoCandidateBigramError(ValueError):
-    """Raised when no candidate bigrams are available for selection."""
-
-
-@dataclass(frozen=True, slots=True)
-class Lexeme:
-    word: tuple[str, ...]
-    ix: int
-
-    def __repr__(self) -> str:
-        return f"({self.word}|{self.ix})"
-
-
-LineIndex = NewType("LineIndex", int)
-TokenIndex = NewType("TokenIndex", int)
-Bigram = tuple[Lexeme, Lexeme]
-ProgressBarOptions = Literal["all", "iterations", "none"]
-
-
-@dataclass(frozen=True)
-class WinnerInfo:
-    bigram: Bigram
-    merged_lexeme: Lexeme
-    bigram_locations: list[tuple[LineIndex, TokenIndex]]
-
-    @cached_property
-    def cleaned_bigram_locations(self) -> tuple[tuple[LineIndex, TokenIndex], ...]:
-        """Greedily select non-overlapping bigram starts per line."""
-        clean_locations: list[tuple[LineIndex, TokenIndex]] = []
-        for line, location_group in groupby(self.bigram_locations, key=lambda x: x[0]):
-            exclude_tokens: set[TokenIndex] = set()
-            token_ix = [i[1] for i in location_group]
-            for token in token_ix:
-                if token in exclude_tokens:
-                    continue
-                excludes = [i for i in token_ix if token <= i < token + self.n_lexemes]
-                exclude_tokens.update(excludes)
-                clean_locations.append((line, token))
-        return tuple(clean_locations)
-
-    def clean_bigram_locations(self) -> list[tuple[LineIndex, TokenIndex]]:
-        return list(self.cleaned_bigram_locations)
-
-    @property
-    def n_lexemes(self) -> int:
-        return len(self.merged_lexeme.word)
-
-    @property
-    def merge_token_count(self) -> int:
-        return len(self.cleaned_bigram_locations)
-
-
-StepPayload = tuple[
-    float,
-    list[str],
-    int,
-    list[str],
-    int,
-    list[str],
-    int,
-    list[tuple[int, int]],
-    list[tuple[int, int]],
-]
-
-
-EnumType = TypeVar("EnumType", bound=Enum)
-
-
-def _coerce_enum(
-    value: EnumType | str, enum_type: type[EnumType], argument_name: str
-) -> EnumType:
-    if isinstance(value, enum_type):
-        return value
-    try:
-        return enum_type(value)
-    except ValueError as exc:
-        options = ", ".join(repr(option.value) for option in enum_type)
-        raise ValueError(
-            f"Invalid {argument_name} {value!r}. Expected one of: {options}."
-        ) from exc
-
-
-def _winner_from_payload(
-    payload: StepPayload,
-) -> tuple[WinnerInfo, float, set[LineIndex]]:
-    (
-        selected_score,
-        left_word,
-        left_ix,
-        right_word,
-        right_ix,
-        merged_word,
-        merged_ix,
-        bigram_locations,
-        cleaned_locations,
-    ) = payload
-
-    winner = WinnerInfo(
-        bigram=(
-            Lexeme(tuple(left_word), left_ix),
-            Lexeme(tuple(right_word), right_ix),
-        ),
-        merged_lexeme=Lexeme(tuple(merged_word), merged_ix),
-        bigram_locations=[
-            (LineIndex(line_ix), TokenIndex(token_ix))
-            for (line_ix, token_ix) in bigram_locations
-        ],
-    )
-    line_hits = {LineIndex(line_ix) for (line_ix, _) in cleaned_locations}
-    return winner, selected_score, line_hits
-
-
-def run(
-    corpus: list[list[str]],
-    iterations: int,
-    *,
-    method: SelectionMethod | str = SelectionMethod.log_likelihood,
-    min_count: int = 0,
-    output: Path | None = None,
-    progress_bar: ProgressBarOptions = "iterations",
-    tie_breaker: TieBreaker | str = TieBreaker.deterministic,
-    on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
-    min_score: float | None = None,
-) -> list[WinnerInfo]:
-    """Run the remerge algorithm."""
-    method = _coerce_enum(method, SelectionMethod, "method")
-    tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
-    on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
-
-    winners: list[WinnerInfo] = []
-    engine = Engine(corpus, method.value, min_count, tie_breaker.value)
-
-    if output is not None:
-        print(f"Outputting winning merged lexemes to '{output}'")
-
-    iterations_iter = (
-        trange(iterations)
-        if progress_bar in {"all", "iterations"}
-        else range(iterations)
-    )
-
-    for _ in iterations_iter:
-        status, payload, selected_score = engine.step(min_score)
-
-        if status == "no_candidate":
-            if on_exhausted is ExhaustionPolicy.raise_:
-                raise NoCandidateBigramError(
-                    f"No candidate bigrams available for method={method.value!r} "
-                    f"and min_count={min_count}."
-                )
-            break
-
-        if status == "below_min_score":
-            if on_exhausted is ExhaustionPolicy.raise_:
-                raise NoCandidateBigramError(
-                    f"Best candidate score ({selected_score}) is below "
-                    f"min_score ({min_score})."
-                )
-            break
-
-        if status != "winner" or payload is None:
-            raise RuntimeError(f"Unexpected engine status {status!r}.")
-
-        winner, score, line_hits = _winner_from_payload(payload)
-        winners.append(winner)
-
-        if output is not None:
-            winner_lexemes = {i: w.merged_lexeme.word for i, w in enumerate(winners)}
-            output.write_text(json.dumps(winner_lexemes))
-
-        if isinstance(iterations_iter, tqdm):
-            corpus_length = engine.corpus_length()
-            pct_bgr = len(line_hits) / corpus_length if corpus_length else 0.0
-            iterations_iter.set_postfix(
-                {
-                    "last_winner": winner.merged_lexeme.word,
-                    "score": f"{score:.4g}",
-                    "pct_bgr": f"{pct_bgr * 100:.1f}%",
-                }
-            )
-
-    return winners
 </file>
 
 <file path="README.md">
@@ -2728,6 +2213,218 @@ I think the algorithm is counting on the fact that it would be very rare to enco
 [^4]: G. Bouma, “Normalized (Pointwise) Mutual Information in Collocation Extraction,” p. 11.
 
 [^5]: T. Dunning, “Accurate Methods for the Statistics of Surprise and Coincidence,” Computational Linguistics, vol. 19, no. 1, p. 14.
+</file>
+
+<file path="src/remerge/core.py">
+import json
+from dataclasses import dataclass
+from enum import Enum
+from functools import cached_property
+from itertools import groupby
+from pathlib import Path
+from typing import Literal, NewType, TypeVar
+
+from tqdm import tqdm
+
+from ._core import Engine
+
+
+class SelectionMethod(str, Enum):
+    frequency = "frequency"
+    log_likelihood = "log_likelihood"
+    npmi = "npmi"
+
+
+class TieBreaker(str, Enum):
+    deterministic = "deterministic"
+    legacy_first_seen = "legacy_first_seen"
+
+
+class ExhaustionPolicy(str, Enum):
+    stop = "stop"
+    raise_ = "raise"
+
+
+class NoCandidateBigramError(ValueError):
+    """Raised when no candidate bigrams are available for selection."""
+
+
+@dataclass(frozen=True, slots=True)
+class Lexeme:
+    word: tuple[str, ...]
+    ix: int
+
+    def __repr__(self) -> str:
+        return f"({self.word}|{self.ix})"
+
+
+LineIndex = NewType("LineIndex", int)
+TokenIndex = NewType("TokenIndex", int)
+Bigram = tuple[Lexeme, Lexeme]
+ProgressBarOptions = Literal["all", "iterations", "none"]
+
+
+@dataclass(frozen=True)
+class WinnerInfo:
+    bigram: Bigram
+    merged_lexeme: Lexeme
+    bigram_locations: list[tuple[LineIndex, TokenIndex]]
+
+    @cached_property
+    def cleaned_bigram_locations(self) -> tuple[tuple[LineIndex, TokenIndex], ...]:
+        """Greedily select non-overlapping bigram starts per line."""
+        clean_locations: list[tuple[LineIndex, TokenIndex]] = []
+        for line, location_group in groupby(self.bigram_locations, key=lambda x: x[0]):
+            exclude_tokens: set[TokenIndex] = set()
+            token_ix = [i[1] for i in location_group]
+            for token in token_ix:
+                if token in exclude_tokens:
+                    continue
+                excludes = [i for i in token_ix if token <= i < token + self.n_lexemes]
+                exclude_tokens.update(excludes)
+                clean_locations.append((line, token))
+        return tuple(clean_locations)
+
+    def clean_bigram_locations(self) -> list[tuple[LineIndex, TokenIndex]]:
+        return list(self.cleaned_bigram_locations)
+
+    @property
+    def n_lexemes(self) -> int:
+        return len(self.merged_lexeme.word)
+
+    @property
+    def merge_token_count(self) -> int:
+        return len(self.cleaned_bigram_locations)
+
+
+StepPayload = tuple[
+    float,
+    list[str],
+    int,
+    list[str],
+    int,
+    list[str],
+    int,
+    list[tuple[int, int]],
+]
+
+
+EnumType = TypeVar("EnumType", bound=Enum)
+
+
+def _coerce_enum(
+    value: EnumType | str, enum_type: type[EnumType], argument_name: str
+) -> EnumType:
+    if isinstance(value, enum_type):
+        return value
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        options = ", ".join(repr(option.value) for option in enum_type)
+        raise ValueError(
+            f"Invalid {argument_name} {value!r}. Expected one of: {options}."
+        ) from exc
+
+
+def _winner_from_payload(payload: StepPayload) -> tuple[WinnerInfo, float]:
+    (
+        selected_score,
+        left_word,
+        left_ix,
+        right_word,
+        right_ix,
+        merged_word,
+        merged_ix,
+        bigram_locations,
+    ) = payload
+
+    winner = WinnerInfo(
+        bigram=(
+            Lexeme(tuple(left_word), left_ix),
+            Lexeme(tuple(right_word), right_ix),
+        ),
+        merged_lexeme=Lexeme(tuple(merged_word), merged_ix),
+        bigram_locations=[
+            (LineIndex(line_ix), TokenIndex(token_ix))
+            for (line_ix, token_ix) in bigram_locations
+        ],
+    )
+    return winner, selected_score
+
+
+def run(
+    corpus: list[list[str]],
+    iterations: int,
+    *,
+    method: SelectionMethod | str = SelectionMethod.log_likelihood,
+    min_count: int = 0,
+    output: Path | None = None,
+    output_debug_each_iteration: bool = False,
+    progress_bar: ProgressBarOptions = "iterations",
+    tie_breaker: TieBreaker | str = TieBreaker.deterministic,
+    on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
+    min_score: float | None = None,
+) -> list[WinnerInfo]:
+    """Run the remerge algorithm."""
+    method = _coerce_enum(method, SelectionMethod, "method")
+    tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
+    on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
+
+    engine = Engine(corpus, method.value, min_count, tie_breaker.value)
+
+    if output is not None:
+        print(f"Outputting winning merged lexemes to '{output}'")
+
+    return_progress = progress_bar in {"all", "iterations"}
+    status, payloads, selected_score, corpus_length, progress_entries = engine.run(
+        iterations, min_score, return_progress
+    )
+
+    if status == "no_candidate" and on_exhausted is ExhaustionPolicy.raise_:
+        raise NoCandidateBigramError(
+            f"No candidate bigrams available for method={method.value!r} "
+            f"and min_count={min_count}."
+        )
+
+    if status == "below_min_score" and on_exhausted is ExhaustionPolicy.raise_:
+        raise NoCandidateBigramError(
+            f"Best candidate score ({selected_score}) is below min_score ({min_score})."
+        )
+
+    if status not in {"completed", "no_candidate", "below_min_score"}:
+        raise RuntimeError(f"Unexpected engine status {status!r}.")
+
+    winners: list[WinnerInfo] = []
+    for payload in payloads:
+        winner, _ = _winner_from_payload(payload)
+        winners.append(winner)
+
+    if return_progress:
+        progress = tqdm(total=iterations)
+        for line_hits_count, score, merged_word in progress_entries:
+            pct_bgr = line_hits_count / corpus_length if corpus_length else 0.0
+            progress.update(1)
+            progress.set_postfix(
+                {
+                    "last_winner": tuple(merged_word),
+                    "score": f"{score:.4g}",
+                    "pct_bgr": f"{pct_bgr * 100:.1f}%",
+                }
+            )
+        progress.close()
+
+    if output is not None:
+        if output_debug_each_iteration:
+            for i in range(len(winners)):
+                winner_lexemes = {
+                    j: winners[j].merged_lexeme.word for j in range(i + 1)
+                }
+                output.write_text(json.dumps(winner_lexemes))
+        else:
+            winner_lexemes = {i: w.merged_lexeme.word for i, w in enumerate(winners)}
+            output.write_text(json.dumps(winner_lexemes))
+
+    return winners
 </file>
 
 </files>
