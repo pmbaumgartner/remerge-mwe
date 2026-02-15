@@ -13,6 +13,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v4
       - name: cache uv
         uses: actions/cache@v4
@@ -20,4 +21,16 @@ jobs:
           path: ~/.cache/uv
           key: uv-${{ runner.os }}-py312-${{ hashFiles('**/uv.lock') }}
       - run: uv sync --all-groups --frozen
-      - run: uv run pytest -v
+      - run: cargo check
+      - run: cargo test
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: uv run --with maturin maturin develop
+      - run: uv run --no-sync pytest -q tests/test_smoke.py
+      - run: uv run --with maturin maturin build --release -o dist
+      - run: |
+          python -m venv .wheel-smoke
+          . .wheel-smoke/bin/activate
+          pip install --upgrade pip
+          pip install dist/remerge_mwe-*.whl
+          python -c "import remerge; assert callable(remerge.run); assert remerge.run([['a','b']], 1, method='frequency', progress_bar='none')[0].merged_lexeme.word == ('a', 'b')"
+      - run: uv run --no-sync pytest -v

@@ -1,0 +1,28 @@
+{
+  "log_likelihood": [
+    {"merged_word": ["you", "know"], "merge_token_count": 4652},
+    {"merged_word": ["mhh", "hmm"], "merge_token_count": 919},
+    {"merged_word": ["i", "think"], "merge_token_count": 1793},
+    {"merged_word": ["i", "mean"], "merge_token_count": 1475},
+    {"merged_word": ["i", "donundrscrt"], "merge_token_count": 1895}
+  ],
+  "frequency": [
+    {"merged_word": ["you", "know"], "merge_token_count": 4652},
+    {"merged_word": ["of", "the"], "merge_token_count": 3166},
+    {"merged_word": ["in", "the"], "merge_token_count": 2994},
+    {"merged_word": ["i", "donundrscrt"], "merge_token_count": 1895},
+    {"merged_word": ["it", "was"], "merge_token_count": 1805}
+  ],
+  "npmi": [
+    {"merged_word": ["et", "cetera"], "merge_token_count": 32},
+    {"merged_word": ["weekundrscrs", "ecofacts"], "merge_token_count": 33},
+    {"merged_word": ["heidi", "hanlon"], "merge_token_count": 61},
+    {"merged_word": ["british", "columbia"], "merge_token_count": 57},
+    {"merged_word": ["herbert", "wasylesko"], "merge_token_count": 45}
+  ],
+  "tie_deterministic": {
+    "frequency": ["a", "b"],
+    "log_likelihood": ["a", "b"],
+    "npmi": ["a", "b"]
+  }
+}

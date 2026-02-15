@@ -72,6 +72,7 @@ pip install git+https://github.com/pmbaumgartner/remerge-mwe.git
 #### Development
 
 Use [`uv`](https://github.com/astral-sh/uv) for local project and dependency management.
+This package now builds a Rust extension via PyO3 + maturin, so a local Rust toolchain is required.
 
 Create/sync the environment with all dependency groups:
 
@@ -79,10 +80,16 @@ Create/sync the environment with all dependency groups:
 uv sync --all-groups
 ```
 
+Build/install the extension for the current environment:
+
+```bash
+uv run --no-sync maturin develop
+```
+
 Run tests:
 
 ```bash
-uv run pytest -v
+uv run --no-sync pytest -v
 ```
 
 Add a runtime dependency:
@@ -96,6 +103,36 @@ Add a development dependency:
 ```bash
 uv add --dev <pkg>
 ```
+
+If you make changes under `rust/`, run `uv run --no-sync maturin develop` again before testing.
+
+PyO3 troubleshooting:
+
+```bash
+# Print PyO3 interpreter/build config and stop.
+PYO3_PRINT_CONFIG=1 uv run --no-sync maturin develop
+
+# Force the Python interpreter PyO3 should inspect.
+PYO3_PYTHON=.venv/bin/python uv run --no-sync maturin develop
+```
+
+If `cargo test` fails with unresolved Python symbols, confirm `pyo3/extension-module`
+is not forced in `Cargo.toml`, then run:
+
+```bash
+cargo clean
+cargo test
+```
+
+#### Rust/PyO3 Backlog
+
+Planned follow-up after stabilization: split into a pure Rust core crate plus a thin
+PyO3 bindings crate.
+
+Trigger for this split:
+1. Parity tests remain stable across 2 consecutive PRs.
+2. CI remains green across 2 consecutive PRs.
+3. Benchmark baseline from `bin/benchmark-remerge.sh --build release --runs 1 --iterations 5` is stable across 2 consecutive PRs.
 
 #### How it works
 

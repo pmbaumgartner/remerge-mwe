@@ -1,0 +1,17 @@
+[package]
+name = "remerge-rs"
+version = "0.2.1"
+edition = "2021"
+
+[lib]
+name = "_core"
+path = "rust/src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+python-extension = ["pyo3/extension-module"]
+
+[dependencies]
+indexmap = "2.12"
+pyo3 = { version = "0.23.5", features = ["abi3-py312"] }

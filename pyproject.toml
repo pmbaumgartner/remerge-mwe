@@ -22,9 +22,13 @@ dev = [
     "pytest-cov>=4.0.0,<5",
 ]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/remerge"]
+[tool.maturin]
+python-source = "src"
+module-name = "remerge._core"
+features = ["python-extension"]
+profile = "release"
+editable-profile = "dev"
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
