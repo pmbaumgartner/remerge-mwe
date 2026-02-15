@@ -1,34 +1,40 @@
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from enum import Enum
 from functools import cached_property
 from itertools import groupby, islice
 from pathlib import Path
 from typing import Callable
 from typing import Counter as CounterType
-from typing import (
-    DefaultDict,
-    Dict,
-    Final,
-    Iterable,
-    List,
-    Literal,
-    NamedTuple,
-    NewType,
-    Optional,
-    Set,
-    Sized,
-    Tuple,
-)
+from typing import DefaultDict, Dict, Iterable, List, Literal, NamedTuple, NewType, Optional
+from typing import Set, Sized, Tuple, TypeVar
 
 import numpy as np
 import numpy.typing as npt
 from tqdm import tqdm, trange
 
-_SMALL: Final[float] = 1e-10
+_SMALL = 1e-10
 
 
-SelectionMethod = Literal["frequency", "log_likelihood", "npmi"]
+class SelectionMethod(str, Enum):
+    frequency = "frequency"
+    log_likelihood = "log_likelihood"
+    npmi = "npmi"
+
+
+class TieBreaker(str, Enum):
+    deterministic = "deterministic"
+    legacy_first_seen = "legacy_first_seen"
+
+
+class ExhaustionPolicy(str, Enum):
+    stop = "stop"
+    raise_ = "raise"
+
+
+class NoCandidateBigramError(ValueError):
+    """Raised when no candidate bigrams are available for selection."""
 
 
 class Lexeme(NamedTuple):
@@ -108,8 +114,8 @@ def _count_bigram_line(*args):
 @dataclass
 class BigramData:
     bigrams_to_freqs: CounterType[Bigram] = field(default_factory=Counter)
-    bigrams_to_locations: Dict[Bigram, List[Tuple[LineIndex, TokenIndex]]] = field(
-        default_factory=lambda: defaultdict(list)
+    bigrams_to_locations: Dict[Bigram, Set[Tuple[LineIndex, TokenIndex]]] = field(
+        default_factory=lambda: defaultdict(set)
     )
     left_lex_freqs: CounterType[Lexeme] = field(default_factory=Counter)
     right_lex_freqs: CounterType[Lexeme] = field(default_factory=Counter)
@@ -136,7 +142,7 @@ class BigramData:
             ):
                 bigram = (left, right)
                 location = (LineIndex(line_ix), TokenIndex(left_ix))
-                bigram_data.bigrams_to_locations[bigram].append(location)
+                bigram_data.bigrams_to_locations[bigram].add(location)
                 line_bigrams.append(bigram)
             bigram_data.batch_add_bigrams(line_bigrams)
         return bigram_data
@@ -165,28 +171,23 @@ class WinnerInfo:
         locations = sorted(bigram_data.bigrams_to_locations[bigram])
         return cls(bigram=bigram, merged_lexeme=new_lexeme, bigram_locations=locations)
 
-    def clean_bigram_locations(self) -> List[Tuple[LineIndex, TokenIndex]]:
-        """This is greedily selecting correct bigrams from the candidate locations of bigrams.
-
-        Why? Well, in the case of a sentence like (a, a, a), with winner = (a, a), we can only convert
-        the first occurrence of this bigram and not the second, since the first occurence would be transformed into the bigram,
-        the new bigram in the second position no longer exists - but could be a candidate for the next round if it is indeed that common
-        of a pattern.
-
-        A more complex example is with winner (a, b, a, b) in ((a, b), (a, b), (a, b)). Here is the same idea: once we
-        merge the first occurence it is no longer available, even though it occurs later.
-        """
+    @cached_property
+    def cleaned_bigram_locations(self) -> Tuple[Tuple[LineIndex, TokenIndex], ...]:
+        """Greedily select non-overlapping bigram starts per line."""
         clean_locations: List[Tuple[LineIndex, TokenIndex]] = []
-        for line, location in groupby(self.bigram_locations, key=lambda x: x[0]):
-            exclude_token: Set[TokenIndex] = set()
-            token_ix = [i[1] for i in location]
+        for line, location_group in groupby(self.bigram_locations, key=lambda x: x[0]):
+            exclude_tokens: Set[TokenIndex] = set()
+            token_ix = [i[1] for i in location_group]
             for token in token_ix:
-                if token in exclude_token:
+                if token in exclude_tokens:
                     continue
-                excludes = [i for i in token_ix if i < token + self.n_lexemes]
-                exclude_token.update(excludes)
+                excludes = [i for i in token_ix if token <= i < token + self.n_lexemes]
+                exclude_tokens.update(excludes)
                 clean_locations.append((line, token))
-        return clean_locations
+        return tuple(clean_locations)
+
+    def clean_bigram_locations(self) -> List[Tuple[LineIndex, TokenIndex]]:
+        return list(self.cleaned_bigram_locations)
 
     @property
     def n_lexemes(self) -> int:
@@ -194,19 +195,19 @@ class WinnerInfo:
 
     @property
     def merge_token_count(self) -> int:
-        # TODO: Optimize by putting in loop so we don't have to iterate here
-        return len(self.clean_bigram_locations())
+        return len(self.cleaned_bigram_locations)
 
 
 def merge_winner(
     winner: WinnerInfo, lexeme_data: LexemeData, bigram_data: BigramData
 ) -> Tuple[LexemeData, BigramData]:
-    bigram_lines = set(i[0] for i in winner.clean_bigram_locations())
+    clean_locations = winner.cleaned_bigram_locations
+    bigram_lines = {line_ix for line_ix, _ in clean_locations}
     old_bigrams_lookup = {
         line_ix: list(lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items())
         for line_ix in bigram_lines
     }
-    for (line_ix, word_ix) in winner.clean_bigram_locations():
+    for (line_ix, word_ix) in clean_locations:
         for lexeme_index in range(winner.n_lexemes):
             pos = TokenIndex(word_ix + lexeme_index)
             old_lexeme = lexeme_data.locations_to_lexemes[line_ix][pos]
@@ -214,19 +215,15 @@ def merge_winner(
             lexeme_data.locations_to_lexemes[line_ix][pos] = lexeme
             lexeme_data.lexemes_to_locations[old_lexeme].remove((line_ix, pos))
             lexeme_data.lexemes_to_locations[lexeme].add((line_ix, pos))
-    for line_ix, lexemes in old_bigrams_lookup.items():
 
-        old_bigrams = list(
-            zip(
-                [lexeme_item[1] for lexeme_item in lexemes],
-                islice([lexeme_item[1] for lexeme_item in lexemes], 1, None),
-            )
-        )
+    for line_ix, lexemes in old_bigrams_lookup.items():
+        old_root_lexemes = [lexeme_item[1] for lexeme_item in lexemes]
+        old_bigrams = list(zip(old_root_lexemes, islice(old_root_lexemes, 1, None)))
 
         new_root_lexemes_items = list(
             lexeme_data.locations_to_root_lexemes(LineIndex(line_ix)).items()
         )
-        new_root_lexemes = list(lex for _, lex in new_root_lexemes_items)
+        new_root_lexemes = [lex for _, lex in new_root_lexemes_items]
         new_bigrams = list(zip(new_root_lexemes, islice(new_root_lexemes, 1, None)))
 
         bigram_data.bigrams_to_freqs.update(new_bigrams)
@@ -247,23 +244,22 @@ def merge_winner(
         ):
             bigram = (left, right)
             location = (LineIndex(line_ix), TokenIndex(left_ix))
-            bigram_data.bigrams_to_locations[bigram].append(location)
+            bigram_data.bigrams_to_locations[bigram].add(location)
 
-    lexeme_data.lexemes_to_freqs[winner.merged_lexeme] = winner.merge_token_count
+    merge_token_count = winner.merge_token_count
+    lexeme_data.lexemes_to_freqs[winner.merged_lexeme] = merge_token_count
 
     el1_freq = lexeme_data.lexemes_to_freqs[winner.bigram[0]]
-    new_el1_freq = el1_freq - winner.merge_token_count
-    lexeme_data.lexemes_to_freqs[winner.bigram[0]] = new_el1_freq
+    lexeme_data.lexemes_to_freqs[winner.bigram[0]] = el1_freq - merge_token_count
 
     el2_freq = lexeme_data.lexemes_to_freqs[winner.bigram[1]]
-    new_el2_freq = el2_freq - winner.merge_token_count
-    lexeme_data.lexemes_to_freqs[winner.bigram[1]] = new_el2_freq
+    lexeme_data.lexemes_to_freqs[winner.bigram[1]] = el2_freq - merge_token_count
 
     lexeme_data.lexemes_to_freqs = {
         k: v for k, v in lexeme_data.lexemes_to_freqs.items() if v != 0
     }
     lexeme_data.lexemes_to_locations = defaultdict(
-        set, {k: v for k, v in lexeme_data.lexemes_to_locations.items() if v != set()}
+        set, {k: v for k, v in lexeme_data.lexemes_to_locations.items() if v}
     )
 
     bigram_data.bigrams_to_freqs = Counter(
@@ -275,165 +271,316 @@ def merge_winner(
     bigram_data.right_lex_freqs = Counter(
         {k: v for k, v in bigram_data.right_lex_freqs.items() if v > 0}
     )
+    bigram_data.bigrams_to_locations = defaultdict(
+        set, {k: v for k, v in bigram_data.bigrams_to_locations.items() if v}
+    )
     assert winner.bigram not in bigram_data.bigrams_to_freqs
     return lexeme_data, bigram_data
 
 
-# NamedTuple doesn't support cached_property
 @dataclass(frozen=True)
-class BigramFreqArrays:
+class BigramCandidateArrays:
     bigram_index: List[Bigram]
-    bigram_freq_array: npt.NDArray[np.int_]
-    el1_freq_array: npt.NDArray[np.int_]
-    el2_freq_array: npt.NDArray[np.int_]
-
-    @cached_property
-    def bigram_count(self) -> np.int_:
-        return self.bigram_freq_array.sum()
+    bigram_freq_array: npt.NDArray[np.int64]
+    el1_freq_array: npt.NDArray[np.int64]
+    el2_freq_array: npt.NDArray[np.int64]
+    total_bigram_count: int
 
     @classmethod
     def from_bigram_data(
         cls, bigram_data: BigramData, min_count: int = 0
-    ) -> "BigramFreqArrays":
-        length = len(
-            [i for i in bigram_data.bigrams_to_freqs.values() if i >= min_count]
+    ) -> "BigramCandidateArrays":
+        total_bigram_count = int(sum(bigram_data.bigrams_to_freqs.values()))
+        candidate_items = [
+            (bigram, freq)
+            for (bigram, freq) in bigram_data.bigrams_to_freqs.items()
+            if freq >= min_count
+        ]
+
+        if not candidate_items:
+            empty = np.array([], dtype=np.int64)
+            return cls([], empty, empty, empty, total_bigram_count)
+
+        bigram_index = [bigram for bigram, _ in candidate_items]
+        bigram_freq_array = np.array([freq for _, freq in candidate_items], dtype=np.int64)
+        el1_freq_array = np.array(
+            [bigram_data.left_lex_freqs[bigram[0]] for bigram, _ in candidate_items],
+            dtype=np.int64,
         )
-        bigram_freq_array = np.empty(length, dtype=np.int_)
-        el1_freq_array = np.empty(length, dtype=np.int_)
-        el2_freq_array = np.empty(length, dtype=np.int_)
-        bigram_index = []
-        i = 0
-        for (bigram, freq) in bigram_data.bigrams_to_freqs.items():
-            if freq < min_count:
-                continue
-            bigram_freq_array[i] = freq
-            l1 = bigram_data.left_lex_freqs[bigram[0]]
-            el1_freq_array[i] = l1
-            l2 = bigram_data.right_lex_freqs[bigram[1]]
-            el2_freq_array[i] = l2
-            bigram_index.append(bigram)
-            i += 1
-            # manually count instead of enumerate
-        return cls(bigram_index, bigram_freq_array, el1_freq_array, el2_freq_array)
+        el2_freq_array = np.array(
+            [bigram_data.right_lex_freqs[bigram[1]] for bigram, _ in candidate_items],
+            dtype=np.int64,
+        )
+        return cls(
+            bigram_index=bigram_index,
+            bigram_freq_array=bigram_freq_array,
+            el1_freq_array=el1_freq_array,
+            el2_freq_array=el2_freq_array,
+            total_bigram_count=total_bigram_count,
+        )
 
 
-def calculate_winner_log_likelihood(
+@dataclass(frozen=True)
+class ScoredBigram:
+    bigram: Bigram
+    score: float
+    frequency: int
+
+    @property
+    def merged_word(self) -> Tuple[str, ...]:
+        return self.bigram[0].word + self.bigram[1].word
+
+
+def _safe_ll_term(
+    observed: npt.NDArray[np.float64], expected: npt.NDArray[np.float64]
+) -> npt.NDArray[np.float64]:
+    return np.where(
+        observed > 0,
+        observed * np.log((observed / (expected + _SMALL)) + _SMALL),
+        0.0,
+    )
+
+
+def _calculate_npmi(data: BigramCandidateArrays) -> npt.NDArray[np.float64]:
+    if data.total_bigram_count == 0:
+        return np.array([], dtype=np.float64)
+    prob_ab = data.bigram_freq_array / data.total_bigram_count
+    prob_a = data.el1_freq_array / data.total_bigram_count
+    prob_b = data.el2_freq_array / data.total_bigram_count
+    with np.errstate(divide="ignore", invalid="ignore"):
+        numerator = np.log(prob_ab / (prob_a * prob_b))
+        denominator = -(np.log(prob_ab))
+        npmi = np.divide(
+            numerator,
+            denominator,
+            out=np.full_like(numerator, np.nan, dtype=np.float64),
+            where=denominator > 0,
+        )
+    perfect_association = np.isclose(denominator, 0.0) & np.isclose(numerator, 0.0)
+    return np.where(perfect_association, 1.0, npmi)
+
+
+def _calculate_log_likelihood(data: BigramCandidateArrays) -> npt.NDArray[np.float64]:
+    if data.total_bigram_count == 0:
+        return np.array([], dtype=np.float64)
+
+    # For reference, see also: nltk.collocations.BigramAssocMeasures, specifically
+    # _contingency in nltk.metrics.association.
+    obs_a = data.bigram_freq_array.astype(np.float64)
+    obs_b = data.el1_freq_array.astype(np.float64) - obs_a
+    obs_c = data.el2_freq_array.astype(np.float64) - obs_a
+    obs_d = data.total_bigram_count - obs_a - obs_b - obs_c
+    obs_d = np.maximum(obs_d, 0.0)
+
+    exp_a = ((obs_a + obs_b) * (obs_a + obs_c)) / data.total_bigram_count
+    exp_b = ((obs_a + obs_b) * (obs_b + obs_d)) / data.total_bigram_count
+    exp_c = ((obs_c + obs_d) * (obs_a + obs_c)) / data.total_bigram_count
+    exp_d = ((obs_c + obs_d) * (obs_b + obs_d)) / data.total_bigram_count
+
+    ll_a = _safe_ll_term(obs_a, exp_a)
+    ll_b = _safe_ll_term(obs_b, exp_b)
+    ll_c = _safe_ll_term(obs_c, exp_c)
+    ll_d = _safe_ll_term(obs_d, exp_d)
+
+    log_likelihood = 2.0 * (ll_a + ll_b + ll_c + ll_d)
+    return np.where(obs_a > exp_a, log_likelihood, log_likelihood * -1.0)
+
+
+def _coerce_scores(scores: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+    if scores.size == 0:
+        return scores
+    return np.where(np.isfinite(scores), scores, -np.inf)
+
+
+def _as_scored_bigrams(
+    data: BigramCandidateArrays, scores: npt.NDArray[np.float64]
+) -> List[ScoredBigram]:
+    safe_scores = _coerce_scores(scores)
+    if safe_scores.size == 0 or np.all(safe_scores == -np.inf):
+        return []
+    return [
+        ScoredBigram(
+            bigram=bigram,
+            score=float(score),
+            frequency=int(freq),
+        )
+        for bigram, score, freq in zip(
+            data.bigram_index, safe_scores, data.bigram_freq_array
+        )
+    ]
+
+
+def calculate_candidates_log_likelihood(
     bigram_data: BigramData, min_count: int = 0
-) -> Bigram:
-    data = BigramFreqArrays.from_bigram_data(bigram_data, min_count=min_count)
-    log_likelihoods = _calculate_log_likelihood(data)
-    winner_ix = np.argmax(log_likelihoods)
-    winner: Bigram = data.bigram_index[winner_ix]
-    return winner
+) -> List[ScoredBigram]:
+    data = BigramCandidateArrays.from_bigram_data(bigram_data, min_count=min_count)
+    scores = _calculate_log_likelihood(data)
+    return _as_scored_bigrams(data, scores)
 
 
-def calculate_winner_npmi(bigram_data: BigramData, min_count: int = 0) -> Bigram:
-    data = BigramFreqArrays.from_bigram_data(bigram_data, min_count=min_count)
-    npmis = _calculate_npmi(data)
-    winner_ix = np.argmax(npmis)
-    winner: Bigram = data.bigram_index[winner_ix]
-    return winner
+def calculate_candidates_npmi(
+    bigram_data: BigramData, min_count: int = 0
+) -> List[ScoredBigram]:
+    data = BigramCandidateArrays.from_bigram_data(bigram_data, min_count=min_count)
+    scores = _calculate_npmi(data)
+    return _as_scored_bigrams(data, scores)
 
 
-def calculate_winner_frequency(bigrams: BigramData, min_count: int = 0) -> Bigram:
-    return bigrams.bigrams_to_freqs.most_common(1)[0][0]
+def calculate_candidates_frequency(
+    bigram_data: BigramData, min_count: int = 0
+) -> List[ScoredBigram]:
+    candidates = []
+    for bigram, freq in bigram_data.bigrams_to_freqs.items():
+        if freq < min_count:
+            continue
+        candidates.append(
+            ScoredBigram(bigram=bigram, score=float(freq), frequency=int(freq))
+        )
+    return candidates
 
 
-def _calculate_npmi(data: BigramFreqArrays) -> npt.NDArray[np.float64]:
-    prob_ab = data.bigram_freq_array / data.bigram_count
-    prob_a = data.el1_freq_array / data.bigram_count
-    prob_b = data.el2_freq_array / data.bigram_count
-    npmi = np.log(prob_ab / (prob_a * prob_b)) / -(np.log(prob_ab))
-    return npmi
-
-
-def _calculate_log_likelihood(data: BigramFreqArrays) -> npt.NDArray[np.float64]:
-    # For reference, see also: nltk.collocations.BigramAssocMeasures, specifically _contingency
-    # http://ecologyandevolution.org/statsdocs/online-stats-manual-chapter4.html
-    obsA = data.bigram_freq_array
-    obsB = data.el1_freq_array - obsA
-    obsC = data.el2_freq_array - obsA
-    obsD = data.bigram_count - obsA - obsB - obsC
-
-    expA = ((obsA + obsB) * (obsA + obsC)) / data.bigram_count
-    expB = ((obsA + obsB) * (obsB + obsD)) / data.bigram_count
-    expC = ((obsC + obsD) * (obsA + obsC)) / data.bigram_count
-    expD = ((obsC + obsD) * (obsB + obsD)) / data.bigram_count
-
-    llA = obsA * np.log((obsA / (expA + _SMALL)) + _SMALL)
-    llB = obsB * np.log((obsB / (expB + _SMALL)) + _SMALL)
-    llC = obsC * np.log((obsC / (expC + _SMALL)) + _SMALL)
-    llD = obsD * np.log((obsD / (expD + _SMALL)) + _SMALL)
-
-    log_likelihood = 2.0 * (llA + llB + llC + llD)
-    log_likelihood = np.where(llA > 0, log_likelihood, log_likelihood * -1.0)
-    return log_likelihood
-
-
-SELECTION_METHODS: Dict[SelectionMethod, Callable[[BigramData, int], Bigram]] = {
-    "log_likelihood": calculate_winner_log_likelihood,
-    "frequency": calculate_winner_frequency,
-    "npmi": calculate_winner_npmi,
+SelectionFunction = Callable[[BigramData, int], List[ScoredBigram]]
+SELECTION_METHODS: Dict[SelectionMethod, SelectionFunction] = {
+    SelectionMethod.log_likelihood: calculate_candidates_log_likelihood,
+    SelectionMethod.frequency: calculate_candidates_frequency,
+    SelectionMethod.npmi: calculate_candidates_npmi,
 }
 
 ProgressBarOptions = Literal["all", "iterations", "none"]
+
+EnumType = TypeVar("EnumType", bound=Enum)
+
+
+def _coerce_enum(
+    value: EnumType | str, enum_type: type[EnumType], argument_name: str
+) -> EnumType:
+    if isinstance(value, enum_type):
+        return value
+    try:
+        return enum_type(value)
+    except ValueError as exc:
+        options = ", ".join(repr(option.value) for option in enum_type)
+        raise ValueError(
+            f"Invalid {argument_name} {value!r}. Expected one of: {options}."
+        ) from exc
+
+
+def _select_candidate(
+    candidates: List[ScoredBigram], tie_breaker: TieBreaker
+) -> Optional[ScoredBigram]:
+    if not candidates:
+        return None
+
+    max_score = max(candidate.score for candidate in candidates)
+    if tie_breaker is TieBreaker.legacy_first_seen:
+        for candidate in candidates:
+            if np.isclose(candidate.score, max_score, atol=1e-12, rtol=1e-12):
+                return candidate
+        return None
+
+    top_score_candidates = [
+        candidate
+        for candidate in candidates
+        if np.isclose(candidate.score, max_score, atol=1e-12, rtol=1e-12)
+    ]
+    top_score_candidates.sort(key=lambda c: (-c.frequency, c.merged_word))
+    return top_score_candidates[0] if top_score_candidates else None
 
 
 def run(
     corpus: List[List[str]],
     iterations: int,
     *,
-    method: SelectionMethod = "log_likelihood",
+    method: SelectionMethod | str = SelectionMethod.log_likelihood,
     min_count: int = 0,
     output: Optional[Path] = None,
     progress_bar: ProgressBarOptions = "iterations",
+    tie_breaker: TieBreaker | str = TieBreaker.deterministic,
+    on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
+    min_score: Optional[float] = None,
 ) -> List[WinnerInfo]:
     """Run the remerge algorithm.
 
     Args:
         corpus (List[List[str]]): A corpus of already tokenized texts.
-        iterations (int): The number of iterations to run the algorithm. Papers typically use >500.
-        method (SelectionMethod, optional): One of "frequency", "log_likelihood", or "npmi". Defaults to "log_likelihood".
-        min_count (int, optional): The minimum count required for a bigram to be included in the winner calculations.
-          If choosing NPMI ("npmi") as the selection method, prefer using min_count because this measure is biased towards
-          infrequent word pairs. Defaults to 0.
-        output (Optional[Path], optional): A file path to output the winning merged lexemes as JSON. Defaults to None.
-        progress_bar (ProgressBarOptions, optional): Verbosity of progress bar. "all" will display the lexeme and bigram
-          construction progress each iteration plus total iteration progress. "iterations" will display progress
-          on the total number of iterations. "none" has no output. Defaults to "iterations".
+        iterations (int): The number of iterations to run the algorithm.
+        method (SelectionMethod | str, optional): One of "frequency", "log_likelihood",
+          or "npmi". Defaults to "log_likelihood".
+        min_count (int, optional): The minimum count required for a bigram to be included
+          in winner calculations. Defaults to 0.
+        output (Optional[Path], optional): A file path to output winners as JSON.
+          Defaults to None.
+        progress_bar (ProgressBarOptions, optional): Verbosity of progress bar.
+          Defaults to "iterations".
+        tie_breaker (TieBreaker | str, optional): Tie-breaking strategy for equal-score
+          candidates. Defaults to "deterministic".
+        on_exhausted (ExhaustionPolicy | str, optional): Behavior when no candidate
+          remains. Defaults to "stop".
+        min_score (Optional[float], optional): Stop or raise when the best score is below
+          this threshold. Defaults to None.
 
     Returns:
-        List[WinnerInfo]: The winning bigram from each iteration.
+        List[WinnerInfo]: The winning bigram from each executed iteration.
     """
+    method = _coerce_enum(method, SelectionMethod, "method")
+    tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
+    on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
+
     winners: List[WinnerInfo] = []
     all_progress = progress_bar == "all"
     lexemes = LexemeData.from_corpus(corpus, progress_bar=all_progress)
     bigrams = BigramData.from_lexemes(lexemes, progress_bar=all_progress)
     winner_selection_function = SELECTION_METHODS[method]
+
     if output is not None:
         print(f"Outputting winning merged lexemes to '{output}'")
+
     iterations_iter = (
         trange(iterations)
         if progress_bar in {"all", "iterations"}
         else range(iterations)
     )
+
     for _ in iterations_iter:
-        winning_bigram = winner_selection_function(bigrams, min_count)
+        candidates = winner_selection_function(bigrams, min_count)
+        selected = _select_candidate(candidates, tie_breaker)
+
+        if selected is None:
+            if on_exhausted is ExhaustionPolicy.raise_:
+                raise NoCandidateBigramError(
+                    f"No candidate bigrams available for method={method.value!r} "
+                    f"and min_count={min_count}."
+                )
+            break
+
+        if min_score is not None and selected.score < min_score:
+            if on_exhausted is ExhaustionPolicy.raise_:
+                raise NoCandidateBigramError(
+                    f"Best candidate score ({selected.score}) is below "
+                    f"min_score ({min_score})."
+                )
+            break
+
         winner = WinnerInfo.from_bigram_with_data(
-            bigram=winning_bigram, bigram_data=bigrams
+            bigram=selected.bigram, bigram_data=bigrams
         )
         winners.append(winner)
+
         if output:
             winner_lexemes = {i: w.merged_lexeme.word for i, w in enumerate(winners)}
             output.write_text(json.dumps(winner_lexemes))
+
         lexemes, bigrams = merge_winner(winner, lexemes, bigrams)
+
         if isinstance(iterations_iter, tqdm):
-            lines = set(w[0] for w in winner.bigram_locations)
-            pct_bgr = len(lines) / lexemes.corpus_length
+            lines = {line for line, _ in winner.cleaned_bigram_locations}
+            pct_bgr = len(lines) / lexemes.corpus_length if lexemes.corpus_length else 0.0
             iterations_iter.set_postfix(
                 {
                     "last_winner": winner.merged_lexeme.word,
+                    "score": f"{selected.score:.4g}",
                     "pct_bgr": f"{pct_bgr*100:.1f}%",
                 }
             )
+
     return winners

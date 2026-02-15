@@ -19,7 +19,8 @@ def sample_corpus():
     """
     corpus: List[List[str]] = []
     this_folder = Path(__file__).parent
-    for txt_file in (this_folder / Path("sample_corpus/")).glob("*.TXT"):
+    txt_files = sorted((this_folder / Path("sample_corpus/")).glob("*.TXT"))
+    for txt_file in txt_files:
         for line in txt_file.read_text().split("\n"):
             if line:
                 tokens: List[str] = line.split(" ")
