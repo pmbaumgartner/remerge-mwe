@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def sample_corpus():
     """We'll use the corpus included in the original implementation,
     which is "[...] a combination of the Santa Barbara

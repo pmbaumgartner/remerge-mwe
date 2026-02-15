@@ -109,7 +109,9 @@ def _coerce_enum(
         ) from exc
 
 
-def _winner_from_payload(payload: StepPayload) -> tuple[WinnerInfo, float, set[LineIndex]]:
+def _winner_from_payload(
+    payload: StepPayload,
+) -> tuple[WinnerInfo, float, set[LineIndex]]:
     (
         selected_score,
         left_word,
@@ -202,7 +204,7 @@ def run(
                 {
                     "last_winner": winner.merged_lexeme.word,
                     "score": f"{score:.4g}",
-                    "pct_bgr": f"{pct_bgr*100:.1f}%",
+                    "pct_bgr": f"{pct_bgr * 100:.1f}%",
                 }
             )
 

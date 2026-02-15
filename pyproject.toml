@@ -32,3 +32,10 @@ editable-profile = "dev"
 [build-system]
 requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
+
+[tool.pytest.ini_options]
+markers = [
+    "fast: quick, small-corpus tests for local iteration",
+    "corpus: tests that exercise the bundled sample corpus",
+    "parity: full-corpus regression parity checks (slow)",
+]

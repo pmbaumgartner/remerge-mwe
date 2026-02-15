@@ -933,4 +933,62 @@ mod tests {
                 .all(|locations| !locations.is_empty()));
         }
     }
+
+    #[test]
+    fn frequency_respects_min_count() {
+        let mut engine = build_engine(
+            vec![vec!["a", "b"], vec!["a", "c"]],
+            SelectionMethod::Frequency,
+            2,
+        );
+        let status = engine.step_internal(None);
+        assert!(matches!(status, StepStatus::NoCandidate));
+    }
+
+    #[test]
+    fn empty_or_single_token_corpus_has_no_candidate() {
+        let mut empty_engine = build_engine(vec![], SelectionMethod::Frequency, 0);
+        assert!(matches!(
+            empty_engine.step_internal(None),
+            StepStatus::NoCandidate
+        ));
+
+        let mut single_engine = build_engine(vec![vec!["a"]], SelectionMethod::Frequency, 0);
+        assert!(matches!(
+            single_engine.step_internal(None),
+            StepStatus::NoCandidate
+        ));
+    }
+
+    #[test]
+    fn consecutive_merge_path_is_greedy() {
+        let mut engine = build_engine(
+            vec![vec!["a", "a", "a", "a"]],
+            SelectionMethod::Frequency,
+            0,
+        );
+
+        let StepStatus::Winner(first) = engine.step_internal(None) else {
+            panic!("expected first winner");
+        };
+        assert_eq!(first.clean_locations.len(), 2);
+
+        let StepStatus::Winner(second) = engine.step_internal(None) else {
+            panic!("expected second winner");
+        };
+        assert_eq!(second.winner.merged_lexeme.word, vec!["a", "a", "a", "a"]);
+    }
+
+    #[test]
+    fn scoring_methods_select_winners_on_small_corpus() {
+        let corpus = vec![vec!["a", "b", "a", "b", "c"], vec!["a", "b", "d", "e"]];
+        for method in [
+            SelectionMethod::Frequency,
+            SelectionMethod::LogLikelihood,
+            SelectionMethod::Npmi,
+        ] {
+            let mut engine = build_engine(corpus.clone(), method, 0);
+            assert!(matches!(engine.step_internal(None), StepStatus::Winner(_)));
+        }
+    }
 }

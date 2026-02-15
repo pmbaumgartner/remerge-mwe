@@ -89,7 +89,13 @@ uv run --no-sync maturin develop
 Run tests:
 
 ```bash
-uv run --no-sync pytest -v
+uv run --no-sync pytest -v -m "not corpus and not parity"
+```
+
+Run full corpus/parity checks (slower, intended for CI/mainline validation):
+
+```bash
+uv run --no-sync pytest -v -m "corpus or parity"
 ```
 
 Add a runtime dependency:
