@@ -1,7 +1,7 @@
-use indexmap::IndexMap;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use smallvec::{smallvec, SmallVec};
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
@@ -93,7 +93,7 @@ impl Interner {
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
 struct Lexeme {
-    word: Vec<TokenId>,
+    word: SmallVec<[TokenId; 3]>,
     ix: usize,
 }
 
@@ -117,7 +117,7 @@ impl LexemeData {
             let mut line_lexemes = Vec::with_capacity(tokens.len());
             for (word_ix, word) in tokens.iter().enumerate() {
                 let lexeme = Lexeme {
-                    word: vec![*word],
+                    word: smallvec![*word],
                     ix: 0,
                 };
                 let loc = (line_ix, word_ix);
@@ -157,7 +157,9 @@ impl LexemeData {
 
 #[derive(Default)]
 struct BigramData {
-    bigrams_to_freqs: IndexMap<Bigram, i64>,
+    bigrams_to_freqs: HashMap<Bigram, i64>,
+    bigrams_first_seen_order: HashMap<Bigram, usize>,
+    next_bigram_order: usize,
     bigrams_to_locations: HashMap<Bigram, HashSet<Location>>,
     left_lex_freqs: HashMap<Lexeme, i64>,
     right_lex_freqs: HashMap<Lexeme, i64>,
@@ -191,7 +193,14 @@ impl BigramData {
             .right_lex_freqs
             .entry(bigram.right.clone())
             .or_insert(0) += delta;
+
+        let was_present = self.bigrams_to_freqs.contains_key(bigram);
         *self.bigrams_to_freqs.entry(bigram.clone()).or_insert(0) += delta;
+        if delta > 0 && !was_present {
+            self.bigrams_first_seen_order
+                .insert(bigram.clone(), self.next_bigram_order);
+            self.next_bigram_order += 1;
+        }
     }
 }
 
@@ -220,7 +229,7 @@ impl WinnerInfo {
         Self {
             bigram: bigram.clone(),
             merged_lexeme: Lexeme {
-                word: all_words,
+                word: all_words.into_iter().collect(),
                 ix: 0,
             },
             bigram_locations: locations,
@@ -357,8 +366,9 @@ fn score_ll_npmi(
     }
 }
 
-fn merged_word_ids(bigram: &Bigram) -> Vec<TokenId> {
-    let mut merged = Vec::with_capacity(bigram.left.word.len() + bigram.right.word.len());
+fn merged_word_ids(bigram: &Bigram) -> SmallVec<[TokenId; 6]> {
+    let mut merged =
+        SmallVec::<[TokenId; 6]>::with_capacity(bigram.left.word.len() + bigram.right.word.len());
     merged.extend_from_slice(&bigram.left.word);
     merged.extend_from_slice(&bigram.right.word);
     merged
@@ -367,70 +377,52 @@ fn merged_word_ids(bigram: &Bigram) -> Vec<TokenId> {
 fn select_candidate(
     tie_breaker: TieBreaker,
     method: SelectionMethod,
-    bigrams_to_freqs: &IndexMap<Bigram, i64>,
+    bigrams_to_freqs: &HashMap<Bigram, i64>,
+    bigrams_first_seen_order: &HashMap<Bigram, usize>,
     candidate_scores: &HashMap<Bigram, CandidateScore>,
     min_count: i64,
 ) -> Option<(Bigram, CandidateScore)> {
     if method == SelectionMethod::Frequency {
-        if tie_breaker == TieBreaker::LegacyFirstSeen {
-            let mut best: Option<(Bigram, CandidateScore)> = None;
-            let mut best_score = f64::NEG_INFINITY;
-            for (bigram, freq) in bigrams_to_freqs {
-                if *freq < min_count {
-                    continue;
-                }
-                let score = *freq as f64;
-                if score > best_score {
-                    best_score = score;
-                    best = Some((
-                        bigram.clone(),
-                        CandidateScore {
-                            score,
-                            frequency: *freq,
-                        },
-                    ));
-                }
-            }
-            return best;
-        }
-
         let mut best: Option<(Bigram, CandidateScore)> = None;
-        let mut best_key: Option<(Reverse<i64>, Vec<TokenId>)> = None;
-        let mut max_score = f64::NEG_INFINITY;
+        let mut best_key: Option<(Reverse<i64>, SmallVec<[TokenId; 6]>)> = None;
+        let mut best_score = f64::NEG_INFINITY;
+        let mut best_order = usize::MAX;
 
         for (bigram, freq) in bigrams_to_freqs {
             if *freq < min_count {
                 continue;
             }
             let score = *freq as f64;
-            if score > max_score {
-                max_score = score;
-                best = Some((
-                    bigram.clone(),
-                    CandidateScore {
-                        score,
-                        frequency: *freq,
-                    },
-                ));
-                best_key = Some((Reverse(*freq), merged_word_ids(bigram)));
+            let candidate = CandidateScore {
+                score,
+                frequency: *freq,
+            };
+            let order = *bigrams_first_seen_order.get(bigram).unwrap_or(&usize::MAX);
+
+            if best.is_none() || score > best_score {
+                best_score = score;
+                best_order = order;
+                best = Some((bigram.clone(), candidate.clone()));
+                if tie_breaker == TieBreaker::Deterministic {
+                    best_key = Some((Reverse(*freq), merged_word_ids(bigram)));
+                }
                 continue;
             }
 
-            if !scores_close(score, max_score) {
-                continue;
-            }
-
-            let candidate_key = (Reverse(*freq), merged_word_ids(bigram));
-            if let Some(key) = &best_key {
-                if candidate_key < *key {
-                    best = Some((
-                        bigram.clone(),
-                        CandidateScore {
-                            score,
-                            frequency: *freq,
-                        },
-                    ));
-                    best_key = Some(candidate_key);
+            if scores_close(score, best_score) {
+                if tie_breaker == TieBreaker::LegacyFirstSeen {
+                    if order < best_order {
+                        best_order = order;
+                        best = Some((bigram.clone(), candidate));
+                    }
+                } else {
+                    let candidate_key = (Reverse(*freq), merged_word_ids(bigram));
+                    if let Some(key) = &best_key {
+                        if candidate_key < *key {
+                            best = Some((bigram.clone(), candidate));
+                            best_key = Some(candidate_key);
+                        }
+                    }
                 }
             }
         }
@@ -442,43 +434,39 @@ fn select_candidate(
         return None;
     }
 
-    let max_score = candidate_scores
-        .values()
-        .map(|c| c.score)
-        .fold(f64::NEG_INFINITY, f64::max);
-
-    if tie_breaker == TieBreaker::LegacyFirstSeen {
-        for (bigram, _) in bigrams_to_freqs {
-            if let Some(candidate) = candidate_scores.get(bigram) {
-                if scores_close(candidate.score, max_score) {
-                    return Some((bigram.clone(), candidate.clone()));
-                }
-            }
-        }
-        return None;
-    }
-
     let mut best: Option<(Bigram, CandidateScore)> = None;
-    let mut best_key: Option<(Reverse<i64>, Vec<TokenId>)> = None;
+    let mut best_key: Option<(Reverse<i64>, SmallVec<[TokenId; 6]>)> = None;
+    let mut best_score = f64::NEG_INFINITY;
+    let mut best_order = usize::MAX;
 
     for (bigram, candidate) in candidate_scores {
-        if !scores_close(candidate.score, max_score) {
+        let order = *bigrams_first_seen_order.get(bigram).unwrap_or(&usize::MAX);
+
+        if best.is_none() || candidate.score > best_score {
+            best_score = candidate.score;
+            best_order = order;
+            best = Some((bigram.clone(), candidate.clone()));
+            if tie_breaker == TieBreaker::Deterministic {
+                best_key = Some((Reverse(candidate.frequency), merged_word_ids(bigram)));
+            }
             continue;
         }
 
-        let candidate_key = (Reverse(candidate.frequency), merged_word_ids(bigram));
-        match (&best, &best_key) {
-            (None, None) => {
-                best = Some((bigram.clone(), candidate.clone()));
-                best_key = Some(candidate_key);
-            }
-            (Some(_), Some(key)) => {
-                if candidate_key < *key {
+        if scores_close(candidate.score, best_score) {
+            if tie_breaker == TieBreaker::LegacyFirstSeen {
+                if order < best_order {
+                    best_order = order;
                     best = Some((bigram.clone(), candidate.clone()));
-                    best_key = Some(candidate_key);
+                }
+            } else {
+                let candidate_key = (Reverse(candidate.frequency), merged_word_ids(bigram));
+                if let Some(key) = &best_key {
+                    if candidate_key < *key {
+                        best = Some((bigram.clone(), candidate.clone()));
+                        best_key = Some(candidate_key);
+                    }
                 }
             }
-            _ => {}
         }
     }
 
@@ -631,7 +619,8 @@ fn merge_winner(
             .map(|freq| *freq <= 0)
             .unwrap_or(false);
         if remove_freq {
-            bigram_data.bigrams_to_freqs.shift_remove(bigram);
+            bigram_data.bigrams_to_freqs.remove(bigram);
+            bigram_data.bigrams_first_seen_order.remove(bigram);
         }
 
         let remove_locations = bigram_data
@@ -686,9 +675,10 @@ impl Engine {
             return;
         }
 
+        #[allow(clippy::manual_is_multiple_of)]
         let full = force_full
             || self.candidate_scores.is_empty()
-            || self.iteration_counter.is_multiple_of(FULL_RESCORE_INTERVAL);
+            || self.iteration_counter % FULL_RESCORE_INTERVAL == 0;
 
         let total_bigram_count = self.bigrams.bigrams_to_freqs.values().sum::<i64>();
 
@@ -819,6 +809,7 @@ impl Engine {
             self.tie_breaker,
             self.method,
             &self.bigrams.bigrams_to_freqs,
+            &self.bigrams.bigrams_first_seen_order,
             &self.candidate_scores,
             self.min_count,
         ) else {
@@ -898,7 +889,13 @@ impl Engine {
             }
         }
 
-        ("completed".to_string(), winners, None, corpus_length, progress)
+        (
+            "completed".to_string(),
+            winners,
+            None,
+            corpus_length,
+            progress,
+        )
     }
 }
 
