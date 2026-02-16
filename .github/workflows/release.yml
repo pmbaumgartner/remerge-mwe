@@ -116,7 +116,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip twine
           pip install --no-index --find-links dist remerge-mwe
-          python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency', progress_bar='none')[0].merged_lexeme.word == ('a', 'b')"
+          python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency')[0].merged_lexeme.word == ('a', 'b')"
 
       - name: Check package metadata
         run: twine check dist/*
