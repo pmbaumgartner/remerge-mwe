@@ -85,7 +85,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v7
 
       - name: Download wheel artifacts
         uses: actions/download-artifact@v4
@@ -110,7 +109,11 @@ jobs:
 
       - name: Smoke test sdist install
         run: |
-          uv run --isolated --no-project --with dist/*.tar.gz -- python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency')[0].merged_lexeme.word == ('a', 'b')"
+          python -m venv .sdist-smoke
+          . .sdist-smoke/bin/activate
+          python -m pip install --upgrade pip
+          pip install dist/*.tar.gz
+          python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency')[0].merged_lexeme.word == ('a', 'b')"
 
   publish:
     name: Publish to PyPI
