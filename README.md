@@ -94,6 +94,12 @@ Run tests:
 uv run --no-sync pytest -v -m "not corpus and not parity"
 ```
 
+Run tests with Python coverage (wrapper/API layer):
+
+```bash
+uv run --no-sync pytest -v -m "not corpus and not parity" --cov=src/remerge --cov-report=term-missing --cov-report=xml
+```
+
 Run full corpus/parity checks (slower, intended for CI/mainline validation):
 
 ```bash
@@ -140,6 +146,24 @@ Releases are automated with GitHub Actions in
 1. Update both version fields to the same value:
    - `pyproject.toml` -> `[project].version`
    - `Cargo.toml` -> `[package].version`
+   Recommended flow with `uv version`:
+
+```bash
+# Check current package version.
+uv version
+uv version --short
+
+# Preview a minor bump without writing changes.
+uv version --bump minor --dry-run
+
+# Apply the bump to pyproject.toml without lock/sync changes.
+uv version --bump minor --frozen
+```
+
+   Then set `Cargo.toml` `[package].version` to match the new `pyproject.toml` version.
+   Important: pushing a matching git tag (for example `v0.3.0`) triggers
+   `/Users/peter/projects/remerge-mwe/.github/workflows/release.yml`; for tag-triggered runs,
+   the workflow will publish to PyPI after build and validation succeed.
 2. Commit and push to `main`.
 3. Create and push a release tag matching that version:
 
@@ -151,8 +175,8 @@ git push origin vX.Y.Z
 4. Verify the `Release` workflow completes successfully:
    - wheels built for Linux/macOS/Windows
    - sdist built
-   - smoke test + `twine check` pass
-   - publish job succeeds
+   - wheel and sdist smoke tests pass
+   - publish job succeeds via `uv publish`
 5. Confirm artifacts on PyPI:
    - https://pypi.org/project/remerge-mwe/
 
@@ -160,6 +184,16 @@ Manual dry-run/backfill:
 - Trigger `Release` via `workflow_dispatch`.
 - Leave `publish=false` for build/validation only.
 - Set `publish=true` and `release_tag=vX.Y.Z` only when you intend to upload.
+
+Local package build/publish commands (same toolchain used in CI):
+
+```bash
+# Build wheel + sdist from a clean source tree snapshot.
+uv build --no-sources
+
+# Publish previously built artifacts in dist/ (requires credentials/OIDC).
+uv publish dist/*
+```
 
 Trusted Publisher (PyPI OIDC) setup:
 1. In PyPI project settings for `remerge-mwe`, add a Trusted Publisher.

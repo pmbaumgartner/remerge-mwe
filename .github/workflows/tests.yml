@@ -26,14 +26,19 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: uv run --with maturin maturin develop
       - run: uv run --no-sync pytest -q tests/test_smoke.py
-      - run: uv run --with maturin maturin build --release -o dist
+      - run: uv build --wheel --no-sources
       - run: |
           python -m venv .wheel-smoke
           . .wheel-smoke/bin/activate
           pip install --upgrade pip
           pip install dist/remerge_mwe-*.whl
           python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency')[0].merged_lexeme.word == ('a', 'b')"
-      - run: uv run --no-sync pytest -v -m "not corpus and not parity"
+      - run: uv run --no-sync pytest -v -m "not corpus and not parity" --cov=src/remerge --cov-report=term-missing --cov-report=xml --cov-fail-under=95
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: error
 
   full-corpus:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
