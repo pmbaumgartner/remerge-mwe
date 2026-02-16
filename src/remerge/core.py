@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import Enum
-from functools import cached_property
 from typing import TypeVar
 
 from ._core import (
@@ -50,13 +49,6 @@ class WinnerInfo:
     merged_lexeme: Lexeme
     bigram_locations: list[tuple[int, int]]
 
-    @cached_property
-    def cleaned_bigram_locations(self) -> tuple[tuple[int, int], ...]:
-        return tuple(self.bigram_locations)
-
-    def clean_bigram_locations(self) -> list[tuple[int, int]]:
-        return list(self.bigram_locations)
-
     @property
     def n_lexemes(self) -> int:
         return len(self.merged_lexeme.word)
@@ -90,11 +82,13 @@ def _winner_from_step_result(step_result: StepResult) -> tuple[WinnerInfo, float
             Lexeme(tuple(step_result.right_word), step_result.right_ix),
         ),
         merged_lexeme=Lexeme(tuple(step_result.merged_word), step_result.merged_ix),
-        bigram_locations=[
-            (line_ix, token_ix) for (line_ix, token_ix) in step_result.bigram_locations
-        ],
+        bigram_locations=list(step_result.bigram_locations),
     )
     return winner, step_result.score
+
+
+def _collect_winners(step_results: list[StepResult]) -> list[WinnerInfo]:
+    return [_winner_from_step_result(step_result)[0] for step_result in step_results]
 
 
 def _check_engine_status(
@@ -147,6 +141,29 @@ def _make_engine(
     return engine, method, splitter
 
 
+def _run_core(
+    corpus: list[str],
+    *,
+    method: SelectionMethod | str = SelectionMethod.log_likelihood,
+    min_count: int = 0,
+    splitter: Splitter | str = Splitter.delimiter,
+    line_delimiter: str | None = "\n",
+    sentencex_language: str = "en",
+    rescore_interval: int = 25,
+    on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
+) -> tuple[Engine, SelectionMethod, ExhaustionPolicy]:
+    engine, method, _splitter = _make_engine(
+        corpus,
+        method,
+        min_count,
+        splitter,
+        line_delimiter,
+        sentencex_language,
+        rescore_interval,
+    )
+    return engine, method, _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
+
+
 def run(
     corpus: list[str],
     iterations: int,
@@ -161,16 +178,16 @@ def run(
     min_score: float | None = None,
 ) -> list[WinnerInfo]:
     """Run the remerge algorithm."""
-    engine, method, _splitter = _make_engine(
+    engine, method, on_exhausted = _run_core(
         corpus,
-        method,
-        min_count,
-        splitter,
-        line_delimiter,
-        sentencex_language,
-        rescore_interval,
+        method=method,
+        min_count=min_count,
+        splitter=splitter,
+        line_delimiter=line_delimiter,
+        sentencex_language=sentencex_language,
+        rescore_interval=rescore_interval,
+        on_exhausted=on_exhausted,
     )
-    on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
     status, step_results, selected_score, _corpus_length = engine.run(
         iterations, min_score
@@ -183,13 +200,7 @@ def run(
         method=method,
         min_count=min_count,
     )
-
-    winners: list[WinnerInfo] = []
-    for step_result in step_results:
-        winner, _ = _winner_from_step_result(step_result)
-        winners.append(winner)
-
-    return winners
+    return _collect_winners(step_results)
 
 
 def annotate(
@@ -209,16 +220,16 @@ def annotate(
     token_separator: str = "_",
 ) -> tuple[list[WinnerInfo], list[str], list[str]]:
     """Run the remerge algorithm and annotate the merged corpus."""
-    engine, method, _splitter = _make_engine(
+    engine, method, on_exhausted = _run_core(
         corpus,
-        method,
-        min_count,
-        splitter,
-        line_delimiter,
-        sentencex_language,
-        rescore_interval,
+        method=method,
+        min_count=min_count,
+        splitter=splitter,
+        line_delimiter=line_delimiter,
+        sentencex_language=sentencex_language,
+        rescore_interval=rescore_interval,
+        on_exhausted=on_exhausted,
     )
-    on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
     (
         status,
@@ -242,10 +253,4 @@ def annotate(
         method=method,
         min_count=min_count,
     )
-
-    winners: list[WinnerInfo] = []
-    for step_result in step_results:
-        winner, _ = _winner_from_step_result(step_result)
-        winners.append(winner)
-
-    return winners, annotated_docs, mwe_labels
+    return _collect_winners(step_results), annotated_docs, mwe_labels

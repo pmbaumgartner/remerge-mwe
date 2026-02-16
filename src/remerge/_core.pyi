@@ -1,5 +1,3 @@
-from typing import Optional
-
 STATUS_COMPLETED: int
 STATUS_NO_CANDIDATE: int
 STATUS_BELOW_MIN_SCORE: int
@@ -22,11 +20,11 @@ class StepResult:
     @property
     def bigram_locations(self) -> list[tuple[int, int]]: ...
 
-RunOutcome = tuple[int, list[StepResult], Optional[float], int]
+RunOutcome = tuple[int, list[StepResult], float | None, int]
 AnnotateRunOutcome = tuple[
     int,
     list[StepResult],
-    Optional[float],
+    float | None,
     int,
     list[str],
     list[str],
@@ -47,12 +45,12 @@ class Engine:
     def run(
         self,
         iterations: int,
-        min_score: Optional[float] = None,
+        min_score: float | None = None,
     ) -> RunOutcome: ...
     def run_and_annotate(
         self,
         iterations: int,
-        min_score: Optional[float] = None,
+        min_score: float | None = None,
         mwe_prefix: str = "<mwe:",
         mwe_suffix: str = ">",
         token_separator: str = "_",

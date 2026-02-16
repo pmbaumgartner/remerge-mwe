@@ -1,4 +1,5 @@
 import importlib.metadata
+import inspect
 import json
 from pathlib import Path
 
@@ -43,6 +44,38 @@ def test_winner_shape():
     assert winner.merged_lexeme == Lexeme(("a", "b"), 0)
     assert winner.n_lexemes == 2
     assert winner.merge_token_count == 1
+
+
+@pytest.mark.fast
+def test_winnerinfo_redundant_location_helpers_removed():
+    winner = run(["a b c"], 1, method="frequency")[0]
+    assert winner.bigram_locations == [(0, 0)]
+    assert winner.merge_token_count == 1
+    assert not hasattr(winner, "cleaned_bigram_locations")
+    assert not hasattr(winner, "clean_bigram_locations")
+
+
+@pytest.mark.fast
+def test_root_exports_include_types():
+    from remerge import Bigram, Lexeme as RootLexeme, WinnerInfo as RootWinnerInfo
+
+    assert RootLexeme is Lexeme
+    assert RootWinnerInfo is not None
+    assert Bigram is not None
+
+
+@pytest.mark.fast
+def test_run_and_annotate_common_signatures_are_aligned():
+    run_params = list(inspect.signature(run).parameters.values())
+    annotate_params = list(inspect.signature(annotate).parameters.values())
+    annotate_common = annotate_params[: len(run_params)]
+
+    assert [param.name for param in annotate_common] == [
+        param.name for param in run_params
+    ]
+    for run_param, annotate_param in zip(run_params, annotate_common):
+        assert run_param.kind == annotate_param.kind
+        assert run_param.default == annotate_param.default
 
 
 @pytest.mark.fast

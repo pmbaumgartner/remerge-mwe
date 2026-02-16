@@ -16,6 +16,10 @@ const PARALLEL_SCORE_THRESHOLD: usize = 500;
 type TokenId = u32;
 type LexemeId = u32;
 type Location = (usize, usize);
+#[cfg(feature = "location-hashset")]
+type BigramLocations = FxHashSet<Location>;
+#[cfg(not(feature = "location-hashset"))]
+type BigramLocations = Vec<Location>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SelectionMethod {
@@ -182,6 +186,10 @@ impl LexemeStore {
     fn get(&self, id: LexemeId) -> &Lexeme {
         &self.id_to_lexeme[id as usize]
     }
+
+    fn id_for_lexeme(&self, lexeme: &Lexeme) -> Option<LexemeId> {
+        self.lexeme_to_id.get(lexeme).copied()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Ord, PartialOrd)]
@@ -256,7 +264,7 @@ impl LexemeData {
 struct BigramData {
     bigrams_to_freqs: FxHashMap<BigramId, i64>,
     total_bigram_count: i64,
-    bigrams_to_locations: FxHashMap<BigramId, Vec<Location>>,
+    bigrams_to_locations: FxHashMap<BigramId, BigramLocations>,
     left_lex_freqs: FxHashMap<LexemeId, i64>,
     right_lex_freqs: FxHashMap<LexemeId, i64>,
 }
@@ -289,26 +297,83 @@ impl BigramData {
     }
 
     fn add_location(&mut self, bigram: BigramId, location: Location) {
-        self.bigrams_to_locations
-            .entry(bigram)
-            .or_default()
-            .push(location);
-    }
-
-    fn remove_location(&mut self, bigram: BigramId, location: Location) {
-        let mut should_remove = false;
-        if let Some(locations) = self.bigrams_to_locations.get_mut(&bigram) {
-            if let Some(ix) = locations
-                .iter()
-                .position(|candidate| *candidate == location)
-            {
-                locations.swap_remove(ix);
-            }
-            should_remove = locations.is_empty();
+        #[cfg(feature = "location-hashset")]
+        {
+            self.bigrams_to_locations
+                .entry(bigram)
+                .or_default()
+                .insert(location);
         }
 
-        if should_remove {
-            self.bigrams_to_locations.remove(&bigram);
+        #[cfg(not(feature = "location-hashset"))]
+        {
+            self.bigrams_to_locations
+                .entry(bigram)
+                .or_default()
+                .push(location);
+        }
+    }
+
+    fn remove_locations_batch(&mut self, removals: &FxHashMap<BigramId, FxHashSet<Location>>) {
+        for (bigram, to_remove) in removals {
+            let mut should_remove = false;
+            if let Some(locations) = self.bigrams_to_locations.get_mut(bigram) {
+                #[cfg(feature = "location-hashset")]
+                {
+                    for location in to_remove {
+                        locations.remove(location);
+                    }
+                }
+
+                #[cfg(not(feature = "location-hashset"))]
+                {
+                    locations.retain(|location| !to_remove.contains(location));
+                }
+
+                should_remove = locations.is_empty();
+            }
+
+            if should_remove {
+                self.bigrams_to_locations.remove(bigram);
+            }
+        }
+    }
+
+    fn add_locations_batch(&mut self, additions: &FxHashMap<BigramId, Vec<Location>>) {
+        for (bigram, locations) in additions {
+            #[cfg(feature = "location-hashset")]
+            {
+                let target = self.bigrams_to_locations.entry(*bigram).or_default();
+                for location in locations {
+                    target.insert(*location);
+                }
+            }
+
+            #[cfg(not(feature = "location-hashset"))]
+            {
+                self.bigrams_to_locations
+                    .entry(*bigram)
+                    .or_default()
+                    .extend(locations.iter().copied());
+            }
+        }
+    }
+
+    fn locations_for_bigram(&self, bigram: BigramId) -> Vec<Location> {
+        #[cfg(feature = "location-hashset")]
+        {
+            self.bigrams_to_locations
+                .get(&bigram)
+                .map(|locations| locations.iter().copied().collect())
+                .unwrap_or_default()
+        }
+
+        #[cfg(not(feature = "location-hashset"))]
+        {
+            self.bigrams_to_locations
+                .get(&bigram)
+                .cloned()
+                .unwrap_or_default()
         }
     }
 
@@ -502,16 +567,37 @@ fn merged_word_ids(lexeme_store: &LexemeStore, bigram: BigramId) -> SmallVec<[To
 }
 
 fn merged_lexeme_ids_for_bigram(bigram: BigramId, lexeme_store: &mut LexemeStore) -> Vec<LexemeId> {
-    let merged_word = merged_word_ids(lexeme_store, bigram);
+    let merged_word: SmallVec<[TokenId; 3]> = merged_word_ids(lexeme_store, bigram)
+        .iter()
+        .copied()
+        .collect();
     let mut merged_ids = Vec::with_capacity(merged_word.len());
 
+    if let Some(existing_root) = lexeme_store.id_for_lexeme(&Lexeme {
+        word: merged_word.clone(),
+        ix: 0,
+    }) {
+        merged_ids.push(existing_root);
+        for lexeme_ix in 1..merged_word.len() {
+            let lexeme = Lexeme {
+                word: merged_word.clone(),
+                ix: lexeme_ix,
+            };
+            if let Some(existing_id) = lexeme_store.id_for_lexeme(&lexeme) {
+                merged_ids.push(existing_id);
+            } else {
+                merged_ids.clear();
+                break;
+            }
+        }
+        if merged_ids.len() == merged_word.len() {
+            return merged_ids;
+        }
+    }
+
     for lexeme_ix in 0..merged_word.len() {
-        let word = merged_word
-            .iter()
-            .copied()
-            .collect::<SmallVec<[TokenId; 3]>>();
         merged_ids.push(lexeme_store.intern(Lexeme {
-            word,
+            word: merged_word.clone(),
             ix: lexeme_ix,
         }));
     }
@@ -562,18 +648,12 @@ fn clean_bigram_locations(mut locations: Vec<Location>, merged_width: usize) -> 
             ix += 1;
         }
 
-        let mut exclude_tokens = FxHashSet::default();
+        let mut next_valid = 0usize;
         for token in token_ix.iter().copied() {
-            if exclude_tokens.contains(&token) {
-                continue;
+            if token >= next_valid {
+                clean_locations.push((line, token));
+                next_valid = token + merged_width;
             }
-
-            for candidate in token_ix.iter().copied() {
-                if token <= candidate && candidate < token + merged_width {
-                    exclude_tokens.insert(candidate);
-                }
-            }
-            clean_locations.push((line, token));
         }
     }
 
@@ -586,11 +666,7 @@ fn winner_from_bigram_with_data(
     merged_width: usize,
     bigram_data: &BigramData,
 ) -> WinnerInfo {
-    let locations = bigram_data
-        .bigrams_to_locations
-        .get(&bigram)
-        .cloned()
-        .unwrap_or_default();
+    let locations = bigram_data.locations_for_bigram(bigram);
 
     WinnerInfo {
         bigram,
@@ -619,6 +695,9 @@ fn merge_winner(
 
     let mut touched_bigrams = FxHashSet::default();
     touched_bigrams.insert(winner.bigram);
+    let mut old_location_removals: FxHashMap<BigramId, FxHashSet<Location>> = FxHashMap::default();
+    let mut new_location_additions: FxHashMap<BigramId, Vec<Location>> = FxHashMap::default();
+    let mut decremented_bigrams = FxHashSet::default();
 
     let mut old_bigrams_lookup: FxHashMap<usize, Vec<(usize, LexemeId)>> = FxHashMap::default();
     for line_ix in bigram_lines {
@@ -700,15 +779,27 @@ fn merge_winner(
 
         for (bigram, location) in &new_bigrams {
             bigram_data.add_bigram(*bigram, 1);
-            bigram_data.add_location(*bigram, *location);
+            new_location_additions
+                .entry(*bigram)
+                .or_default()
+                .push(*location);
         }
 
         for (bigram, location) in &old_bigrams {
             bigram_data.add_bigram(*bigram, -1);
-            bigram_data.remove_location(*bigram, *location);
-            bigram_data.maybe_remove_bigram(*bigram);
+            old_location_removals
+                .entry(*bigram)
+                .or_default()
+                .insert(*location);
+            decremented_bigrams.insert(*bigram);
             bigram_data.maybe_remove_lr_lexemes(*bigram);
         }
+    }
+
+    bigram_data.remove_locations_batch(&old_location_removals);
+    bigram_data.add_locations_batch(&new_location_additions);
+    for bigram in decremented_bigrams {
+        bigram_data.maybe_remove_bigram(bigram);
     }
 
     touched_bigrams
@@ -720,6 +811,7 @@ struct HeapEntry {
     frequency: i64,
     merged_word: SmallVec<[TokenId; 6]>,
     bigram: BigramId,
+    generation: u64,
 }
 
 impl PartialEq for HeapEntry {
@@ -728,6 +820,7 @@ impl PartialEq for HeapEntry {
             && self.frequency == other.frequency
             && self.score.to_bits() == other.score.to_bits()
             && self.merged_word == other.merged_word
+            && self.generation == other.generation
     }
 }
 
@@ -820,6 +913,8 @@ struct Engine {
     rescore_interval: usize,
     candidate_scores: FxHashMap<BigramId, CandidateScore>,
     candidate_heap: BinaryHeap<HeapEntry>,
+    bigram_generation: FxHashMap<BigramId, u64>,
+    generation_counter: u64,
     dirty_bigrams: FxHashSet<BigramId>,
     iteration_counter: usize,
 }
@@ -829,12 +924,94 @@ impl Engine {
         self.interner.ids_to_strings(token_ids)
     }
 
-    fn heap_entry(&self, bigram: BigramId, score: f64, frequency: i64) -> HeapEntry {
+    fn heap_entry(
+        &self,
+        bigram: BigramId,
+        score: f64,
+        frequency: i64,
+        generation: u64,
+    ) -> HeapEntry {
         HeapEntry {
             score,
             frequency,
             merged_word: merged_word_ids(&self.lexeme_store, bigram),
             bigram,
+            generation,
+        }
+    }
+
+    fn bump_generation(&mut self, bigram: BigramId) -> u64 {
+        self.generation_counter = self.generation_counter.saturating_add(1);
+        self.bigram_generation
+            .insert(bigram, self.generation_counter);
+        self.generation_counter
+    }
+
+    fn push_heap_entry(&mut self, bigram: BigramId, score: f64, frequency: i64) {
+        let generation = self.bump_generation(bigram);
+        self.candidate_heap
+            .push(self.heap_entry(bigram, score, frequency, generation));
+    }
+
+    fn remove_candidate_generation(&mut self, bigram: BigramId) {
+        self.bigram_generation.remove(&bigram);
+    }
+
+    fn maybe_compact_candidate_heap(&mut self) {
+        let live_candidates = match self.method {
+            SelectionMethod::Frequency => self
+                .bigrams
+                .bigrams_to_freqs
+                .values()
+                .filter(|freq| **freq >= self.min_count)
+                .count(),
+            SelectionMethod::LogLikelihood | SelectionMethod::Npmi => self.candidate_scores.len(),
+        };
+        if live_candidates == 0 {
+            self.candidate_heap.clear();
+            self.bigram_generation.clear();
+            return;
+        }
+
+        let heap_len = self.candidate_heap.len();
+        let heap_growth = heap_len.saturating_sub(live_candidates);
+        if heap_len <= live_candidates.saturating_mul(4) || heap_growth < 2048 {
+            return;
+        }
+
+        self.candidate_heap.clear();
+        self.bigram_generation.clear();
+
+        match self.method {
+            SelectionMethod::Frequency => {
+                let entries = self
+                    .bigrams
+                    .bigrams_to_freqs
+                    .iter()
+                    .filter_map(|(bigram, freq)| {
+                        if *freq < self.min_count {
+                            None
+                        } else {
+                            Some((*bigram, *freq))
+                        }
+                    })
+                    .collect::<Vec<_>>();
+
+                for (bigram, freq) in entries {
+                    self.push_heap_entry(bigram, freq as f64, freq);
+                }
+            }
+            SelectionMethod::LogLikelihood | SelectionMethod::Npmi => {
+                let entries = self
+                    .candidate_scores
+                    .iter()
+                    .map(|(bigram, score)| (*bigram, *score))
+                    .collect::<Vec<_>>();
+
+                for (bigram, score) in entries {
+                    self.push_heap_entry(bigram, score.score, score.frequency);
+                }
+            }
         }
     }
 
@@ -842,12 +1019,21 @@ impl Engine {
         if self.method == SelectionMethod::Frequency {
             if force_full || self.candidate_heap.is_empty() {
                 self.candidate_heap.clear();
-                for (bigram, freq) in &self.bigrams.bigrams_to_freqs {
-                    if *freq < self.min_count {
-                        continue;
-                    }
-                    self.candidate_heap
-                        .push(self.heap_entry(*bigram, *freq as f64, *freq));
+                self.bigram_generation.clear();
+                let entries = self
+                    .bigrams
+                    .bigrams_to_freqs
+                    .iter()
+                    .filter_map(|(bigram, freq)| {
+                        if *freq < self.min_count {
+                            None
+                        } else {
+                            Some((*bigram, *freq))
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                for (bigram, freq) in entries {
+                    self.push_heap_entry(bigram, freq as f64, freq);
                 }
                 self.dirty_bigrams.clear();
                 return;
@@ -856,14 +1042,16 @@ impl Engine {
             let dirty = self.dirty_bigrams.drain().collect::<Vec<_>>();
             for bigram in dirty {
                 let Some(freq) = self.bigrams.bigrams_to_freqs.get(&bigram).copied() else {
+                    self.remove_candidate_generation(bigram);
                     continue;
                 };
                 if freq < self.min_count {
+                    self.remove_candidate_generation(bigram);
                     continue;
                 }
-                self.candidate_heap
-                    .push(self.heap_entry(bigram, freq as f64, freq));
+                self.push_heap_entry(bigram, freq as f64, freq);
             }
+            self.maybe_compact_candidate_heap();
             return;
         }
 
@@ -896,11 +1084,11 @@ impl Engine {
 
             self.candidate_scores.clear();
             self.candidate_heap.clear();
+            self.bigram_generation.clear();
             for (bigram, maybe_score) in rescored {
                 if let Some(score) = maybe_score {
                     self.candidate_scores.insert(bigram, score);
-                    self.candidate_heap
-                        .push(self.heap_entry(bigram, score.score, score.frequency));
+                    self.push_heap_entry(bigram, score.score, score.frequency);
                 }
             }
 
@@ -943,16 +1131,26 @@ impl Engine {
         for (bigram, maybe_score) in rescored {
             if let Some(score) = maybe_score {
                 self.candidate_scores.insert(bigram, score);
-                self.candidate_heap
-                    .push(self.heap_entry(bigram, score.score, score.frequency));
+                self.push_heap_entry(bigram, score.score, score.frequency);
             } else {
                 self.candidate_scores.remove(&bigram);
+                self.remove_candidate_generation(bigram);
             }
         }
+        self.maybe_compact_candidate_heap();
     }
 
     fn select_candidate(&mut self) -> Option<(BigramId, CandidateScore)> {
         while let Some(entry) = self.candidate_heap.pop() {
+            let current_generation = self
+                .bigram_generation
+                .get(&entry.bigram)
+                .copied()
+                .unwrap_or(0);
+            if entry.generation != current_generation {
+                continue;
+            }
+
             let current = match self.method {
                 SelectionMethod::Frequency => {
                     let Some(freq) = self.bigrams.bigrams_to_freqs.get(&entry.bigram).copied()
@@ -979,10 +1177,6 @@ impl Engine {
             };
 
             if entry.frequency != current.frequency || !scores_close(entry.score, current.score) {
-                continue;
-            }
-
-            if entry.merged_word != merged_word_ids(&self.lexeme_store, entry.bigram) {
                 continue;
             }
 
@@ -1184,6 +1378,8 @@ impl Engine {
             rescore_interval,
             candidate_scores: FxHashMap::default(),
             candidate_heap: BinaryHeap::new(),
+            bigram_generation: FxHashMap::default(),
+            generation_counter: 0,
             dirty_bigrams: FxHashSet::default(),
             iteration_counter: 0,
         };
@@ -1273,6 +1469,8 @@ mod tests {
             rescore_interval,
             candidate_scores: FxHashMap::default(),
             candidate_heap: BinaryHeap::new(),
+            bigram_generation: FxHashMap::default(),
+            generation_counter: 0,
             dirty_bigrams: FxHashSet::default(),
             iteration_counter: 0,
         };
@@ -1423,12 +1621,8 @@ mod tests {
             FxHashMap::from_iter([(merged_bigram, 1)])
         );
 
-        let locations = engine
-            .bigrams
-            .bigrams_to_locations
-            .get(&merged_bigram)
-            .cloned()
-            .unwrap_or_default();
+        let mut locations = engine.bigrams.locations_for_bigram(merged_bigram);
+        locations.sort_unstable();
         assert_eq!(locations, vec![(0, 0)]);
         assert_eq!(engine.bigrams.total_bigram_count, 1);
         assert_eq!(
@@ -1499,11 +1693,55 @@ mod tests {
             frequency: 9999,
             merged_word: merged_word_ids(&engine.lexeme_store, bigram),
             bigram,
+            generation: 0,
         });
 
         let Some((_winner, candidate)) = engine.select_candidate() else {
             panic!("expected candidate")
         };
         assert!(candidate.frequency < 9999);
+    }
+
+    #[test]
+    fn clean_bigram_locations_filters_overlaps_per_line() {
+        let locations = vec![(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 4)];
+        let cleaned = clean_bigram_locations(locations, 2);
+        assert_eq!(cleaned, vec![(0, 0), (0, 2), (1, 0), (1, 4)]);
+    }
+
+    #[test]
+    fn clean_bigram_locations_is_line_local() {
+        let locations = vec![(0, 0), (0, 3), (1, 1), (1, 2)];
+        let cleaned = clean_bigram_locations(locations, 3);
+        assert_eq!(cleaned, vec![(0, 0), (0, 3), (1, 1)]);
+    }
+
+    #[test]
+    fn merged_lexeme_ids_for_bigram_reuses_existing_ids() {
+        let mut engine = build_engine(
+            vec!["a b a b"],
+            SelectionMethod::Frequency,
+            0,
+            DEFAULT_RESCORE_INTERVAL,
+        );
+        let left = engine.lexeme_store.intern(Lexeme {
+            word: smallvec![engine.interner.id_for("a")],
+            ix: 0,
+        });
+        let right = engine.lexeme_store.intern(Lexeme {
+            word: smallvec![engine.interner.id_for("b")],
+            ix: 0,
+        });
+        let bigram = BigramId { left, right };
+
+        let pre_len = engine.lexeme_store.id_to_lexeme.len();
+        let first_ids = merged_lexeme_ids_for_bigram(bigram, &mut engine.lexeme_store);
+        let after_first_len = engine.lexeme_store.id_to_lexeme.len();
+        let second_ids = merged_lexeme_ids_for_bigram(bigram, &mut engine.lexeme_store);
+        let after_second_len = engine.lexeme_store.id_to_lexeme.len();
+
+        assert_eq!(first_ids, second_ids);
+        assert_eq!(after_first_len, pre_len + first_ids.len());
+        assert_eq!(after_second_len, after_first_len);
     }
 }

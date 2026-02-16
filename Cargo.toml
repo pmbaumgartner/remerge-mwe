@@ -11,6 +11,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = []
 python-extension = ["pyo3/extension-module"]
+location-hashset = []
 
 [dependencies]
 pyo3 = { version = "0.23.5", features = ["abi3-py312"] }
