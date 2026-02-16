@@ -125,7 +125,6 @@ for mode in requested_modes:
                 winners = remerge.run(
                     docs,
                     iterations=iterations,
-                    progress_bar="none",
                     line_delimiter="\\n",
                     **kwargs,
                 )
@@ -134,7 +133,6 @@ for mode in requested_modes:
                 winners = remerge.run(
                     corpus,
                     iterations=iterations,
-                    progress_bar="none",
                     **kwargs,
                 )
             dt = perf_counter() - t0

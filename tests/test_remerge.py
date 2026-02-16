@@ -1,9 +1,16 @@
+import importlib.metadata
 import json
 from pathlib import Path
 
 import pytest
 from remerge import __version__, annotate, run
-from remerge.core import Lexeme, NoCandidateBigramError, SelectionMethod, Splitter
+from remerge.core import (
+    ExhaustionPolicy,
+    Lexeme,
+    NoCandidateBigramError,
+    SelectionMethod,
+    Splitter,
+)
 
 
 def _summarize_winners(winners):
@@ -16,8 +23,9 @@ def _summarize_winners(winners):
     ]
 
 
-def test_version():
-    assert __version__ == "0.2.1"
+@pytest.mark.fast
+def test_version_matches_installed_metadata():
+    assert __version__ == importlib.metadata.version("remerge-mwe")
 
 
 @pytest.mark.corpus
@@ -72,63 +80,21 @@ def test_methods(method, min_count):
 
 
 @pytest.mark.fast
-def test_output(tmp_path):
-    output = tmp_path / "tmp.json"
-    winners = run(["a b a b"], 1, output=output)
-    results = json.loads(output.read_text())
-    assert tuple(results["0"]) == winners[0].merged_lexeme.word
+def test_removed_output_parameter_raises_type_error():
+    with pytest.raises(TypeError):
+        run(["a b a b"], 1, output=Path("/tmp/out.json"))  # type: ignore[call-arg]
 
 
 @pytest.mark.fast
-def test_output_writes_once_by_default(monkeypatch, tmp_path):
-    output = tmp_path / "tmp.json"
-    corpus = ["a a a a"]
-    writes = []
-    original_write_text = Path.write_text
-
-    def _capture_write(path_obj, text, *args, **kwargs):
-        if path_obj == output:
-            writes.append(text)
-        return original_write_text(path_obj, text, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "write_text", _capture_write)
-    winners = run(corpus, 2, output=output)
-
-    assert len(writes) == 1
-    expected = {str(j): list(w.merged_lexeme.word) for j, w in enumerate(winners)}
-    assert json.loads(writes[0]) == expected
-    assert json.loads(output.read_text()) == expected
+def test_removed_output_debug_parameter_raises_type_error():
+    with pytest.raises(TypeError):
+        run(["a b a b"], 1, output_debug_each_iteration=True)  # type: ignore[call-arg]
 
 
 @pytest.mark.fast
-def test_output_debug_writes_each_iteration_with_cumulative_content(
-    monkeypatch, tmp_path
-):
-    output = tmp_path / "tmp.json"
-    corpus = ["a a a a"]
-    writes = []
-    original_write_text = Path.write_text
-
-    def _capture_write(path_obj, text, *args, **kwargs):
-        if path_obj == output:
-            writes.append(text)
-        return original_write_text(path_obj, text, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "write_text", _capture_write)
-    winners = run(
-        corpus,
-        2,
-        output=output,
-        output_debug_each_iteration=True,
-    )
-
-    assert len(writes) == len(winners)
-    for i, payload in enumerate(writes):
-        decoded = json.loads(payload)
-        expected = {
-            str(j): list(w.merged_lexeme.word) for j, w in enumerate(winners[: i + 1])
-        }
-        assert decoded == expected
+def test_removed_tie_breaker_parameter_raises_type_error():
+    with pytest.raises(TypeError):
+        run(["a b"], 1, tie_breaker="deterministic")  # type: ignore[call-arg]
 
 
 @pytest.mark.fast
@@ -138,9 +104,15 @@ def test_empty_or_single_token_corpus_stops_cleanly():
 
 
 @pytest.mark.fast
-def test_exhausted_policy_raise():
+def test_exhausted_policy_raise_with_string_value():
     with pytest.raises(NoCandidateBigramError):
         run(["a"], 1, on_exhausted="raise")
+
+
+@pytest.mark.fast
+def test_exhausted_policy_raise_with_enum_value_string():
+    with pytest.raises(NoCandidateBigramError):
+        run(["a"], 1, on_exhausted=ExhaustionPolicy.raise_.value)
 
 
 @pytest.mark.fast
@@ -171,27 +143,6 @@ def test_deterministic_tie_breaking_is_order_independent(method):
     winner_a = run(corpus_a, 1, method=method)[0].merged_lexeme.word
     winner_b = run(corpus_b, 1, method=method)[0].merged_lexeme.word
     assert winner_a == winner_b == ("a", "b")
-
-
-@pytest.mark.fast
-def test_legacy_tie_breaking_keeps_first_seen_behavior():
-    corpus_a = ["a b", "c d"]
-    corpus_b = ["c d", "a b"]
-
-    winner_a = run(
-        corpus_a,
-        1,
-        method="frequency",
-        tie_breaker="legacy_first_seen",
-    )[0].merged_lexeme.word
-    winner_b = run(
-        corpus_b,
-        1,
-        method="frequency",
-        tie_breaker="legacy_first_seen",
-    )[0].merged_lexeme.word
-
-    assert winner_a != winner_b
 
 
 @pytest.mark.fast
@@ -291,7 +242,6 @@ def test_annotate_winners_match_run():
         splitter=Splitter.delimiter,
         line_delimiter="\n",
         sentencex_language="en",
-        tie_breaker="deterministic",
         on_exhausted="stop",
         min_score=None,
     )
@@ -303,7 +253,6 @@ def test_annotate_winners_match_run():
         splitter=Splitter.delimiter,
         line_delimiter="\n",
         sentencex_language="en",
-        tie_breaker="deterministic",
         on_exhausted="stop",
         min_score=None,
     )
@@ -439,6 +388,65 @@ def test_sentencex_ignores_line_delimiter():
     )
 
     assert with_none == with_custom == []
+
+
+@pytest.mark.fast
+def test_rescore_interval_validation_for_run_and_annotate():
+    with pytest.raises(ValueError):
+        run(["a b a b"], 1, rescore_interval=0)
+
+    with pytest.raises(ValueError):
+        annotate(["a b a b"], 1, rescore_interval=0)
+
+
+@pytest.mark.fast
+def test_rescore_interval_one_runs_ll_and_npmi():
+    corpus = ["a b a c a b a c", "a b a c"]
+    ll = run(corpus, 3, method="log_likelihood", rescore_interval=1)
+    npmi = run(corpus, 3, method="npmi", min_count=0, rescore_interval=1)
+
+    assert len(ll) > 0
+    assert len(npmi) > 0
+
+
+@pytest.mark.fast
+def test_unicode_multibyte_corpus():
+    corpus = ["你好 世界 你好 世界 你好 世界", "😀 😃 😀 😃"]
+    winners = run(corpus, 1, method="frequency")
+    assert winners[0].merged_lexeme.word == ("你好", "世界")
+
+
+@pytest.mark.fast
+def test_pathological_whitespace_corpus_is_handled():
+    corpus = ["   \n\t  ", "", "  a   b  \r\n  ", "\n\n"]
+    winners = run(
+        corpus,
+        1,
+        method="frequency",
+        splitter=Splitter.delimiter,
+        line_delimiter="\n",
+    )
+    assert winners[0].merged_lexeme.word == ("a", "b")
+
+
+@pytest.mark.fast
+def test_mixed_newline_styles_with_custom_delimiter():
+    corpus = ["a b\r\n\r\nc d\r\na b", "a b\r\nx y"]
+    winners = run(
+        corpus,
+        1,
+        method="frequency",
+        splitter=Splitter.delimiter,
+        line_delimiter="\r\n",
+    )
+    assert winners[0].merged_lexeme.word == ("a", "b")
+
+
+@pytest.mark.fast
+def test_smallvec_spill_path_produces_long_mwe():
+    corpus = ["a b c d a b c d a b c d"]
+    winners = run(corpus, 6, method="frequency")
+    assert any(len(winner.merged_lexeme.word) >= 4 for winner in winners)
 
 
 @pytest.mark.parity

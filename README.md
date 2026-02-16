@@ -35,6 +35,8 @@ winners = remerge.run(
 
 There are 3 bigram winner selection methods: [Log-Likelihood (G²)](https://aclanthology.org/J93-1003.pdf)[^5], [NPMI](https://svn.spraakdata.gu.se/repos/gerlof/pub/www/Docs/npmi-pfd.pdf)[^4], and raw frequency. They are available under the `SelectionMethod` enum. The default is log-likelihood, which was used in the original implementation.
 
+Tie-breaking is deterministic only: candidates are ranked by score, then frequency, then lexicographic merged-token order.
+
 If using `NPMI` (`SelectionMethod.npmi`), you likely want to provide a `min_count` parameter, "as infrequent word pairs tend to dominate the top of bigramme lists that are ranked after PMI". (p. 4[^4])
 
 ```python
@@ -52,8 +54,7 @@ winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_coun
 | splitter     | `Splitter`, optional           | Segmenter used before tokenization: `"delimiter"` (default) or `"sentencex"`.                                                                                                                                                                                                                    |
 | line_delimiter | `Optional[str]`, optional    | Delimiter used when `splitter="delimiter"`. Defaults to `\"\\n\"`. Set to `None` to treat each document as a single segment. Ignored when `splitter="sentencex"`.                                                                                                                           |
 | sentencex_language | `str`, optional          | Language code passed to `sentencex` when `splitter="sentencex"` (for example `"en"`). Defaults to `"en"`.                                                                                                                                                                                      |
-| output       | `Optional[Path]`, optional     | A file path to output the winning merged lexemes as JSON. Defaults to None.                                                                                                                                                                                                                     |
-| tie_breaker  | `TieBreaker`, optional         | How ties are resolved among equal-scoring candidates. "deterministic" ranks by score, then frequency, then lexicographic merged token order. "legacy_first_seen" uses prior first-seen behavior. Defaults to "deterministic".                                                             |
+| rescore_interval | `int`, optional             | Number of iterations between full candidate rescoring for LL/NPMI methods. `1` forces full rescoring every iteration; higher values trade exactness for speed. Defaults to `25`.                                                                                                             |
 | on_exhausted | `ExhaustionPolicy`, optional   | Behavior when no candidate passes filters (or threshold): "stop" returns winners collected so far, "raise" raises `NoCandidateBigramError`. Defaults to "stop".                                                                                                                              |
 | min_score    | `Optional[float]`, optional    | Optional minimum score threshold for the selected winner. If the best candidate is below this threshold, behavior follows `on_exhausted`. Defaults to None.                                                                                                                                   |
 
@@ -104,6 +105,12 @@ Run full corpus/parity checks (slower, intended for CI/mainline validation):
 
 ```bash
 uv run --no-sync pytest -v -m "corpus or parity"
+```
+
+Regenerate the parity fixture after intentional algorithm changes:
+
+```bash
+bin/regenerate-parity-fixture.sh
 ```
 
 Add a runtime dependency:

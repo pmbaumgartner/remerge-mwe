@@ -1,16 +1,14 @@
-import json
 from dataclasses import dataclass
 from enum import Enum
 from functools import cached_property
-from itertools import groupby
-from pathlib import Path
-from typing import NewType, TypeVar
+from typing import TypeVar
 
 from ._core import (
     Engine,
     STATUS_BELOW_MIN_SCORE,
     STATUS_COMPLETED,
     STATUS_NO_CANDIDATE,
+    StepResult,
 )
 
 
@@ -18,11 +16,6 @@ class SelectionMethod(str, Enum):
     frequency = "frequency"
     log_likelihood = "log_likelihood"
     npmi = "npmi"
-
-
-class TieBreaker(str, Enum):
-    deterministic = "deterministic"
-    legacy_first_seen = "legacy_first_seen"
 
 
 class Splitter(str, Enum):
@@ -48,8 +41,6 @@ class Lexeme:
         return f"({self.word}|{self.ix})"
 
 
-LineIndex = NewType("LineIndex", int)
-TokenIndex = NewType("TokenIndex", int)
 Bigram = tuple[Lexeme, Lexeme]
 
 
@@ -57,25 +48,14 @@ Bigram = tuple[Lexeme, Lexeme]
 class WinnerInfo:
     bigram: Bigram
     merged_lexeme: Lexeme
-    bigram_locations: list[tuple[LineIndex, TokenIndex]]
+    bigram_locations: list[tuple[int, int]]
 
     @cached_property
-    def cleaned_bigram_locations(self) -> tuple[tuple[LineIndex, TokenIndex], ...]:
-        """Greedily select non-overlapping bigram starts per line."""
-        clean_locations: list[tuple[LineIndex, TokenIndex]] = []
-        for line, location_group in groupby(self.bigram_locations, key=lambda x: x[0]):
-            exclude_tokens: set[TokenIndex] = set()
-            token_ix = [i[1] for i in location_group]
-            for token in token_ix:
-                if token in exclude_tokens:
-                    continue
-                excludes = [i for i in token_ix if token <= i < token + self.n_lexemes]
-                exclude_tokens.update(excludes)
-                clean_locations.append((line, token))
-        return tuple(clean_locations)
+    def cleaned_bigram_locations(self) -> tuple[tuple[int, int], ...]:
+        return tuple(self.bigram_locations)
 
-    def clean_bigram_locations(self) -> list[tuple[LineIndex, TokenIndex]]:
-        return list(self.cleaned_bigram_locations)
+    def clean_bigram_locations(self) -> list[tuple[int, int]]:
+        return list(self.bigram_locations)
 
     @property
     def n_lexemes(self) -> int:
@@ -83,19 +63,7 @@ class WinnerInfo:
 
     @property
     def merge_token_count(self) -> int:
-        return len(self.cleaned_bigram_locations)
-
-
-StepPayload = tuple[
-    float,
-    list[str],
-    int,
-    list[str],
-    int,
-    list[str],
-    int,
-    list[tuple[int, int]],
-]
+        return len(self.bigram_locations)
 
 
 EnumType = TypeVar("EnumType", bound=Enum)
@@ -115,30 +83,18 @@ def _coerce_enum(
         ) from exc
 
 
-def _winner_from_payload(payload: StepPayload) -> tuple[WinnerInfo, float]:
-    (
-        selected_score,
-        left_word,
-        left_ix,
-        right_word,
-        right_ix,
-        merged_word,
-        merged_ix,
-        bigram_locations,
-    ) = payload
-
+def _winner_from_step_result(step_result: StepResult) -> tuple[WinnerInfo, float]:
     winner = WinnerInfo(
         bigram=(
-            Lexeme(tuple(left_word), left_ix),
-            Lexeme(tuple(right_word), right_ix),
+            Lexeme(tuple(step_result.left_word), step_result.left_ix),
+            Lexeme(tuple(step_result.right_word), step_result.right_ix),
         ),
-        merged_lexeme=Lexeme(tuple(merged_word), merged_ix),
+        merged_lexeme=Lexeme(tuple(step_result.merged_word), step_result.merged_ix),
         bigram_locations=[
-            (LineIndex(line_ix), TokenIndex(token_ix))
-            for (line_ix, token_ix) in bigram_locations
+            (line_ix, token_ix) for (line_ix, token_ix) in step_result.bigram_locations
         ],
     )
-    return winner, selected_score
+    return winner, step_result.score
 
 
 def _check_engine_status(
@@ -169,25 +125,26 @@ def _make_engine(
     corpus: list[str],
     method: SelectionMethod | str,
     min_count: int,
-    tie_breaker: TieBreaker | str,
     splitter: Splitter | str,
     line_delimiter: str | None,
     sentencex_language: str,
-) -> tuple[Engine, SelectionMethod, TieBreaker, Splitter]:
+    rescore_interval: int,
+) -> tuple[Engine, SelectionMethod, Splitter]:
     method = _coerce_enum(method, SelectionMethod, "method")
     splitter = _coerce_enum(splitter, Splitter, "splitter")
-    tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
+    if rescore_interval < 1:
+        raise ValueError("rescore_interval must be greater than or equal to 1.")
 
     engine = Engine(
         corpus,
         method.value,
         min_count,
-        tie_breaker.value,
         splitter.value,
         line_delimiter,
         sentencex_language,
+        rescore_interval,
     )
-    return engine, method, tie_breaker, splitter
+    return engine, method, splitter
 
 
 def run(
@@ -199,28 +156,25 @@ def run(
     splitter: Splitter | str = Splitter.delimiter,
     line_delimiter: str | None = "\n",
     sentencex_language: str = "en",
-    output: Path | None = None,
-    output_debug_each_iteration: bool = False,
-    tie_breaker: TieBreaker | str = TieBreaker.deterministic,
+    rescore_interval: int = 25,
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
     min_score: float | None = None,
 ) -> list[WinnerInfo]:
     """Run the remerge algorithm."""
-    engine, method, _tie_breaker, _splitter = _make_engine(
+    engine, method, _splitter = _make_engine(
         corpus,
         method,
         min_count,
-        tie_breaker,
         splitter,
         line_delimiter,
         sentencex_language,
+        rescore_interval,
     )
     on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
-    if output is not None:
-        print(f"Outputting winning merged lexemes to '{output}'")
-
-    status, payloads, selected_score, _corpus_length = engine.run(iterations, min_score)
+    status, step_results, selected_score, _corpus_length = engine.run(
+        iterations, min_score
+    )
     _check_engine_status(
         status,
         selected_score=selected_score,
@@ -231,20 +185,9 @@ def run(
     )
 
     winners: list[WinnerInfo] = []
-    for payload in payloads:
-        winner, _ = _winner_from_payload(payload)
+    for step_result in step_results:
+        winner, _ = _winner_from_step_result(step_result)
         winners.append(winner)
-
-    if output is not None:
-        if output_debug_each_iteration:
-            for i in range(len(winners)):
-                winner_lexemes = {
-                    j: winners[j].merged_lexeme.word for j in range(i + 1)
-                }
-                output.write_text(json.dumps(winner_lexemes))
-        else:
-            winner_lexemes = {i: w.merged_lexeme.word for i, w in enumerate(winners)}
-            output.write_text(json.dumps(winner_lexemes))
 
     return winners
 
@@ -258,7 +201,7 @@ def annotate(
     splitter: Splitter | str = Splitter.delimiter,
     line_delimiter: str | None = "\n",
     sentencex_language: str = "en",
-    tie_breaker: TieBreaker | str = TieBreaker.deterministic,
+    rescore_interval: int = 25,
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
     min_score: float | None = None,
     mwe_prefix: str = "<mwe:",
@@ -266,20 +209,20 @@ def annotate(
     token_separator: str = "_",
 ) -> tuple[list[WinnerInfo], list[str], list[str]]:
     """Run the remerge algorithm and annotate the merged corpus."""
-    engine, method, _tie_breaker, _splitter = _make_engine(
+    engine, method, _splitter = _make_engine(
         corpus,
         method,
         min_count,
-        tie_breaker,
         splitter,
         line_delimiter,
         sentencex_language,
+        rescore_interval,
     )
     on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
     (
         status,
-        payloads,
+        step_results,
         selected_score,
         _corpus_length,
         annotated_docs,
@@ -301,8 +244,8 @@ def annotate(
     )
 
     winners: list[WinnerInfo] = []
-    for payload in payloads:
-        winner, _ = _winner_from_payload(payload)
+    for step_result in step_results:
+        winner, _ = _winner_from_step_result(step_result)
         winners.append(winner)
 
     return winners, annotated_docs, mwe_labels

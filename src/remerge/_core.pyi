@@ -4,21 +4,28 @@ STATUS_COMPLETED: int
 STATUS_NO_CANDIDATE: int
 STATUS_BELOW_MIN_SCORE: int
 
-StepPayload = tuple[
-    float,
-    list[str],
-    int,
-    list[str],
-    int,
-    list[str],
-    int,
-    list[tuple[int, int]],
-]
+class StepResult:
+    @property
+    def score(self) -> float: ...
+    @property
+    def left_word(self) -> list[str]: ...
+    @property
+    def left_ix(self) -> int: ...
+    @property
+    def right_word(self) -> list[str]: ...
+    @property
+    def right_ix(self) -> int: ...
+    @property
+    def merged_word(self) -> list[str]: ...
+    @property
+    def merged_ix(self) -> int: ...
+    @property
+    def bigram_locations(self) -> list[tuple[int, int]]: ...
 
-RunOutcome = tuple[int, list[StepPayload], Optional[float], int]
+RunOutcome = tuple[int, list[StepResult], Optional[float], int]
 AnnotateRunOutcome = tuple[
     int,
-    list[StepPayload],
+    list[StepResult],
     Optional[float],
     int,
     list[str],
@@ -31,10 +38,10 @@ class Engine:
         corpus: list[str],
         method: str,
         min_count: int,
-        tie_breaker: str,
         splitter: str = "delimiter",
         line_delimiter: str | None = None,
         sentencex_language: str = "en",
+        rescore_interval: int = 25,
     ) -> None: ...
     def corpus_length(self) -> int: ...
     def run(
