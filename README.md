@@ -28,7 +28,7 @@ corpus = [
 ]
 
 winners = remerge.run(
-    corpus, iterations=1, method=remerge.SelectionMethod.frequency, progress_bar="all"
+    corpus, iterations=1, method=remerge.SelectionMethod.frequency
 )
 # winners[0].merged_lexeme.word == ('a', 'list')
 ```
@@ -53,7 +53,6 @@ winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_coun
 | line_delimiter | `Optional[str]`, optional    | Delimiter used when `splitter="delimiter"`. Defaults to `\"\\n\"`. Set to `None` to treat each document as a single segment. Ignored when `splitter="sentencex"`.                                                                                                                           |
 | sentencex_language | `str`, optional          | Language code passed to `sentencex` when `splitter="sentencex"` (for example `"en"`). Defaults to `"en"`.                                                                                                                                                                                      |
 | output       | `Optional[Path]`, optional     | A file path to output the winning merged lexemes as JSON. Defaults to None.                                                                                                                                                                                                                     |
-| progress_bar | `ProgressBarOptions`, optional | Verbosity of progress bar. "all" will display the lexeme and bigram construction progress each iteration plus total iteration progress. "iterations" will display progress on total iterations. "none" has no output. Defaults to "iterations".                                             |
 | tie_breaker  | `TieBreaker`, optional         | How ties are resolved among equal-scoring candidates. "deterministic" ranks by score, then frequency, then lexicographic merged token order. "legacy_first_seen" uses prior first-seen behavior. Defaults to "deterministic".                                                             |
 | on_exhausted | `ExhaustionPolicy`, optional   | Behavior when no candidate passes filters (or threshold): "stop" returns winners collected so far, "raise" raises `NoCandidateBigramError`. Defaults to "stop".                                                                                                                              |
 | min_score    | `Optional[float]`, optional    | Optional minimum score threshold for the selected winner. If the best candidate is below this threshold, behavior follows `on_exhausted`. Defaults to None.                                                                                                                                   |

@@ -11,8 +11,7 @@ StepPayload = tuple[
     list[tuple[int, int]],
 ]
 
-ProgressPayload = tuple[int, float, list[str]]
-RunOutcome = tuple[str, list[StepPayload], Optional[float], int, list[ProgressPayload]]
+RunOutcome = tuple[str, list[StepPayload], Optional[float], int]
 
 class Engine:
     def __init__(
@@ -30,5 +29,4 @@ class Engine:
         self,
         iterations: int,
         min_score: Optional[float] = None,
-        return_progress: bool = False,
     ) -> RunOutcome: ...

@@ -4,9 +4,7 @@ from enum import Enum
 from functools import cached_property
 from itertools import groupby
 from pathlib import Path
-from typing import Literal, NewType, TypeVar
-
-from tqdm import tqdm
+from typing import NewType, TypeVar
 
 from ._core import Engine
 
@@ -48,7 +46,6 @@ class Lexeme:
 LineIndex = NewType("LineIndex", int)
 TokenIndex = NewType("TokenIndex", int)
 Bigram = tuple[Lexeme, Lexeme]
-ProgressBarOptions = Literal["all", "iterations", "none"]
 
 
 @dataclass(frozen=True)
@@ -150,7 +147,6 @@ def run(
     sentencex_language: str = "en",
     output: Path | None = None,
     output_debug_each_iteration: bool = False,
-    progress_bar: ProgressBarOptions = "iterations",
     tie_breaker: TieBreaker | str = TieBreaker.deterministic,
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
     min_score: float | None = None,
@@ -174,10 +170,7 @@ def run(
     if output is not None:
         print(f"Outputting winning merged lexemes to '{output}'")
 
-    return_progress = progress_bar in {"all", "iterations"}
-    status, payloads, selected_score, corpus_length, progress_entries = engine.run(
-        iterations, min_score, return_progress
-    )
+    status, payloads, selected_score, _corpus_length = engine.run(iterations, min_score)
 
     if status == "no_candidate" and on_exhausted is ExhaustionPolicy.raise_:
         raise NoCandidateBigramError(
@@ -197,20 +190,6 @@ def run(
     for payload in payloads:
         winner, _ = _winner_from_payload(payload)
         winners.append(winner)
-
-    if return_progress:
-        progress = tqdm(total=iterations)
-        for line_hits_count, score, merged_word in progress_entries:
-            pct_bgr = line_hits_count / corpus_length if corpus_length else 0.0
-            progress.update(1)
-            progress.set_postfix(
-                {
-                    "last_winner": tuple(merged_word),
-                    "score": f"{score:.4g}",
-                    "pct_bgr": f"{pct_bgr * 100:.1f}%",
-                }
-            )
-        progress.close()
 
     if output is not None:
         if output_debug_each_iteration:

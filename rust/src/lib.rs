@@ -407,7 +407,6 @@ struct CandidateScore {
 struct StepData {
     score: f64,
     winner: WinnerInfo,
-    line_hits_count: usize,
 }
 
 enum StepStatus {
@@ -956,15 +955,6 @@ impl Engine {
 
         let winner = WinnerInfo::from_bigram_with_data(&bigram, &self.bigrams);
         let clean_locations = winner.cleaned_bigram_locations();
-        let line_hits_count = if clean_locations.is_empty() {
-            0
-        } else {
-            1 + clean_locations
-                .windows(2)
-                .filter(|pair| pair[0].0 != pair[1].0)
-                .count()
-        };
-
         let touched = merge_winner(
             &winner,
             &clean_locations,
@@ -977,7 +967,6 @@ impl Engine {
         StepStatus::Winner(StepData {
             score: candidate.score,
             winner,
-            line_hits_count,
         })
     }
 
@@ -985,52 +974,25 @@ impl Engine {
         &mut self,
         iterations: usize,
         min_score: Option<f64>,
-        return_progress: bool,
     ) -> RunOutcome {
         let mut winners = Vec::new();
-        let mut progress = Vec::new();
         let corpus_length = self.lexemes.corpus_length();
 
         for _ in 0..iterations {
             match self.step_internal(min_score) {
                 StepStatus::NoCandidate => {
-                    return (
-                        "no_candidate".to_string(),
-                        winners,
-                        None,
-                        corpus_length,
-                        progress,
-                    )
+                    return ("no_candidate".to_string(), winners, None, corpus_length)
                 }
                 StepStatus::BelowMinScore(score) => {
-                    return (
-                        "below_min_score".to_string(),
-                        winners,
-                        Some(score),
-                        corpus_length,
-                        progress,
-                    )
+                    return ("below_min_score".to_string(), winners, Some(score), corpus_length)
                 }
                 StepStatus::Winner(step_data) => {
-                    if return_progress {
-                        progress.push((
-                            step_data.line_hits_count,
-                            step_data.score,
-                            self.token_ids_to_strings(&step_data.winner.merged_lexeme.word),
-                        ));
-                    }
                     winners.push(self.step_payload(step_data));
                 }
             }
         }
 
-        (
-            "completed".to_string(),
-            winners,
-            None,
-            corpus_length,
-            progress,
-        )
+        ("completed".to_string(), winners, None, corpus_length)
     }
 }
 
@@ -1045,14 +1007,7 @@ type StepPayload = (
     Vec<(usize, usize)>,
 );
 
-type ProgressPayload = (usize, f64, Vec<String>);
-type RunOutcome = (
-    String,
-    Vec<StepPayload>,
-    Option<f64>,
-    usize,
-    Vec<ProgressPayload>,
-);
+type RunOutcome = (String, Vec<StepPayload>, Option<f64>, usize);
 
 #[pymethods]
 impl Engine {
@@ -1101,15 +1056,14 @@ impl Engine {
         self.lexemes.corpus_length()
     }
 
-    #[pyo3(signature = (iterations, min_score=None, return_progress=false))]
+    #[pyo3(signature = (iterations, min_score=None))]
     fn run(
         &mut self,
         py: Python<'_>,
         iterations: usize,
         min_score: Option<f64>,
-        return_progress: bool,
     ) -> RunOutcome {
-        py.allow_threads(|| self.run_internal(iterations, min_score, return_progress))
+        py.allow_threads(|| self.run_internal(iterations, min_score))
     }
 }
 
@@ -1182,7 +1136,7 @@ mod tests {
         let mut run_engine = build_engine(corpus.clone(), SelectionMethod::Frequency, 0);
         let mut step_engine = build_engine(corpus, SelectionMethod::Frequency, 0);
 
-        let (_, run_payloads, _, _, _) = run_engine.run_internal(3, None, false);
+        let (_, run_payloads, _, _) = run_engine.run_internal(3, None);
 
         let mut step_payloads = Vec::new();
         for _ in 0..3 {

@@ -7,7 +7,6 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
-    "tqdm>=4.64.1,<5",
     "numpy>=2,<3",
 ]
 
