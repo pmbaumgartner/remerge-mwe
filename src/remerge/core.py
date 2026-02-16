@@ -6,7 +6,12 @@ from itertools import groupby
 from pathlib import Path
 from typing import NewType, TypeVar
 
-from ._core import Engine
+from ._core import (
+    Engine,
+    STATUS_BELOW_MIN_SCORE,
+    STATUS_COMPLETED,
+    STATUS_NO_CANDIDATE,
+)
 
 
 class SelectionMethod(str, Enum):
@@ -136,6 +141,30 @@ def _winner_from_payload(payload: StepPayload) -> tuple[WinnerInfo, float]:
     return winner, selected_score
 
 
+def _check_engine_status(
+    status: int,
+    *,
+    selected_score: float | None,
+    min_score: float | None,
+    on_exhausted: ExhaustionPolicy,
+    method: SelectionMethod,
+    min_count: int,
+) -> None:
+    if status == STATUS_NO_CANDIDATE and on_exhausted is ExhaustionPolicy.raise_:
+        raise NoCandidateBigramError(
+            f"No candidate bigrams available for method={method.value!r} "
+            f"and min_count={min_count}."
+        )
+
+    if status == STATUS_BELOW_MIN_SCORE and on_exhausted is ExhaustionPolicy.raise_:
+        raise NoCandidateBigramError(
+            f"Best candidate score ({selected_score}) is below min_score ({min_score})."
+        )
+
+    if status not in {STATUS_COMPLETED, STATUS_NO_CANDIDATE, STATUS_BELOW_MIN_SCORE}:
+        raise RuntimeError(f"Unexpected engine status code {status!r}.")
+
+
 def _make_engine(
     corpus: list[str],
     method: SelectionMethod | str,
@@ -192,20 +221,14 @@ def run(
         print(f"Outputting winning merged lexemes to '{output}'")
 
     status, payloads, selected_score, _corpus_length = engine.run(iterations, min_score)
-
-    if status == "no_candidate" and on_exhausted is ExhaustionPolicy.raise_:
-        raise NoCandidateBigramError(
-            f"No candidate bigrams available for method={method.value!r} "
-            f"and min_count={min_count}."
-        )
-
-    if status == "below_min_score" and on_exhausted is ExhaustionPolicy.raise_:
-        raise NoCandidateBigramError(
-            f"Best candidate score ({selected_score}) is below min_score ({min_score})."
-        )
-
-    if status not in {"completed", "no_candidate", "below_min_score"}:
-        raise RuntimeError(f"Unexpected engine status {status!r}.")
+    _check_engine_status(
+        status,
+        selected_score=selected_score,
+        min_score=min_score,
+        on_exhausted=on_exhausted,
+        method=method,
+        min_count=min_count,
+    )
 
     winners: list[WinnerInfo] = []
     for payload in payloads:
@@ -268,20 +291,14 @@ def annotate(
         mwe_suffix,
         token_separator,
     )
-
-    if status == "no_candidate" and on_exhausted is ExhaustionPolicy.raise_:
-        raise NoCandidateBigramError(
-            f"No candidate bigrams available for method={method.value!r} "
-            f"and min_count={min_count}."
-        )
-
-    if status == "below_min_score" and on_exhausted is ExhaustionPolicy.raise_:
-        raise NoCandidateBigramError(
-            f"Best candidate score ({selected_score}) is below min_score ({min_score})."
-        )
-
-    if status not in {"completed", "no_candidate", "below_min_score"}:
-        raise RuntimeError(f"Unexpected engine status {status!r}.")
+    _check_engine_status(
+        status,
+        selected_score=selected_score,
+        min_score=min_score,
+        on_exhausted=on_exhausted,
+        method=method,
+        min_count=min_count,
+    )
 
     winners: list[WinnerInfo] = []
     for payload in payloads:

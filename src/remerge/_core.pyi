@@ -1,5 +1,9 @@
 from typing import Optional
 
+STATUS_COMPLETED: int
+STATUS_NO_CANDIDATE: int
+STATUS_BELOW_MIN_SCORE: int
+
 StepPayload = tuple[
     float,
     list[str],
@@ -11,9 +15,9 @@ StepPayload = tuple[
     list[tuple[int, int]],
 ]
 
-RunOutcome = tuple[str, list[StepPayload], Optional[float], int]
+RunOutcome = tuple[int, list[StepPayload], Optional[float], int]
 AnnotateRunOutcome = tuple[
-    str,
+    int,
     list[StepPayload],
     Optional[float],
     int,

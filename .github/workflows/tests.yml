@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
       - name: cache uv
         uses: actions/cache@v4
         with:
@@ -22,6 +22,7 @@ jobs:
           key: uv-${{ runner.os }}-py312-${{ hashFiles('**/uv.lock') }}
       - run: uv sync --all-groups --frozen
       - run: cargo check
+      - run: cargo fmt --all -- --check
       - run: cargo test
       - run: cargo clippy --all-targets -- -D warnings
       - run: uv run --with maturin maturin develop
@@ -52,7 +53,7 @@ jobs:
         with:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
-      - uses: astral-sh/setup-uv@v4
+      - uses: astral-sh/setup-uv@v7
       - name: cache uv
         uses: actions/cache@v4
         with:
