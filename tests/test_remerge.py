@@ -44,13 +44,14 @@ def test_winner_shape():
     assert winner.bigram[1] == Lexeme(("b",), 0)
     assert winner.merged_lexeme == Lexeme(("a", "b"), 0)
     assert winner.n_lexemes == 2
+    assert isinstance(winner.score, float)
     assert winner.merge_token_count == 1
 
 
 @pytest.mark.fast
 def test_winnerinfo_redundant_location_helpers_removed():
     winner = run(["a b c"], 1, method="frequency")[0]
-    assert winner.bigram_locations == [(0, 0)]
+    assert not hasattr(winner, "bigram_locations")
     assert winner.merge_token_count == 1
     assert not hasattr(winner, "cleaned_bigram_locations")
     assert not hasattr(winner, "clean_bigram_locations")
@@ -118,6 +119,9 @@ def test_corpus_length_matches_segment_count():
     corpus = ["a b\nc d\ne f"]
     engine = Engine(corpus, "frequency", 0, "delimiter", "\n", "en", 25)
     assert engine.corpus_length() == 3
+
+    engine_default_delim = Engine(corpus, "frequency", 0)
+    assert engine_default_delim.corpus_length() == 3
 
     engine_no_delim = Engine(["a b c"], "frequency", 0, "delimiter", None, "en", 25)
     assert engine_no_delim.corpus_length() == 1
@@ -441,6 +445,38 @@ def test_rescore_interval_validation_for_run_and_annotate():
 
     with pytest.raises(ValueError):
         annotate(["a b a b"], 1, rescore_interval=0)
+
+
+@pytest.mark.fast
+def test_iterations_validation_for_run_and_annotate():
+    with pytest.raises(ValueError):
+        run(["a b a b"], -1)
+
+    with pytest.raises(ValueError):
+        annotate(["a b a b"], -1)
+
+
+@pytest.mark.fast
+def test_min_count_validation_for_run_and_annotate():
+    with pytest.raises(ValueError):
+        run(["a b a b"], 1, min_count=-1)
+
+    with pytest.raises(ValueError):
+        annotate(["a b a b"], 1, min_count=-1)
+
+
+@pytest.mark.fast
+def test_sentencex_language_validation_for_run_and_annotate():
+    with pytest.raises(ValueError):
+        run(["a b a b"], 1, splitter=Splitter.sentencex, sentencex_language="   ")
+
+    with pytest.raises(ValueError):
+        annotate(
+            ["a b a b"],
+            1,
+            splitter=Splitter.sentencex,
+            sentencex_language="   ",
+        )
 
 
 @pytest.mark.fast

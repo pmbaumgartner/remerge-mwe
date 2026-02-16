@@ -43,19 +43,16 @@ class Lexeme:
 Bigram = tuple[Lexeme, Lexeme]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class WinnerInfo:
     bigram: Bigram
     merged_lexeme: Lexeme
-    bigram_locations: list[tuple[int, int]]
+    score: float
+    merge_token_count: int
 
     @property
     def n_lexemes(self) -> int:
         return len(self.merged_lexeme.word)
-
-    @property
-    def merge_token_count(self) -> int:
-        return len(self.bigram_locations)
 
 
 EnumType = TypeVar("EnumType", bound=Enum)
@@ -75,20 +72,20 @@ def _coerce_enum(
         ) from exc
 
 
-def _winner_from_step_result(step_result: StepResult) -> tuple[WinnerInfo, float]:
-    winner = WinnerInfo(
+def _winner_from_step_result(step_result: StepResult) -> WinnerInfo:
+    return WinnerInfo(
         bigram=(
             Lexeme(tuple(step_result.left_word), step_result.left_ix),
             Lexeme(tuple(step_result.right_word), step_result.right_ix),
         ),
         merged_lexeme=Lexeme(tuple(step_result.merged_word), step_result.merged_ix),
-        bigram_locations=list(step_result.bigram_locations),
+        score=step_result.score,
+        merge_token_count=step_result.merge_token_count,
     )
-    return winner, step_result.score
 
 
 def _collect_winners(step_results: list[StepResult]) -> list[WinnerInfo]:
-    return [_winner_from_step_result(step_result)[0] for step_result in step_results]
+    return [_winner_from_step_result(step_result) for step_result in step_results]
 
 
 def _check_engine_status(
@@ -126,8 +123,12 @@ def _make_engine(
 ) -> tuple[Engine, SelectionMethod, Splitter]:
     method = _coerce_enum(method, SelectionMethod, "method")
     splitter = _coerce_enum(splitter, Splitter, "splitter")
+    if min_count < 0:
+        raise ValueError("min_count must be greater than or equal to 0.")
     if rescore_interval < 1:
         raise ValueError("rescore_interval must be greater than or equal to 1.")
+    if splitter is Splitter.sentencex and not sentencex_language.strip():
+        raise ValueError("sentencex_language must be a non-empty language code.")
 
     engine = Engine(
         corpus,
@@ -177,7 +178,17 @@ def run(
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
     min_score: float | None = None,
 ) -> list[WinnerInfo]:
-    """Run the remerge algorithm."""
+    """Run the remerge algorithm.
+
+    The returned winners include:
+    - ``score``: the candidate score used to select each winning bigram
+      (frequency, log-likelihood, or NPMI depending on ``method``).
+    - ``merge_token_count``: number of non-overlapping merge applications for
+      that winner in the current iteration.
+    """
+    if iterations < 0:
+        raise ValueError("iterations must be greater than or equal to 0.")
+
     engine, method, on_exhausted = _run_core(
         corpus,
         method=method,
@@ -219,7 +230,15 @@ def annotate(
     mwe_suffix: str = ">",
     token_separator: str = "_",
 ) -> tuple[list[WinnerInfo], list[str], list[str]]:
-    """Run the remerge algorithm and annotate the merged corpus."""
+    """Run the remerge algorithm and annotate the merged corpus.
+
+    ``annotate()`` uses the same winner payload as ``run()``.
+    Output text is whitespace-normalized because tokenization is done with
+    Rust ``split_whitespace()`` and reconstructed with single-space joins.
+    """
+    if iterations < 0:
+        raise ValueError("iterations must be greater than or equal to 0.")
+
     engine, method, on_exhausted = _run_core(
         corpus,
         method=method,

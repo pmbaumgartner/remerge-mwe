@@ -43,6 +43,13 @@ If using `NPMI` (`SelectionMethod.npmi`), you likely want to provide a `min_coun
 winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_count=25)
 ```
 
+#### Migration (`0.4.0`)
+
+`WinnerInfo.bigram_locations` has been removed.
+Use:
+- `winner.merge_token_count` for the number of non-overlapping merges applied in that iteration.
+- `winner.score` for the score that selected the winning bigram (frequency, log-likelihood, or NPMI based on `method`).
+
 #### API - `remerge.run`
 
 | Argument     | Type                           | Description                                                                                                                                                                                                                                                                                     |
@@ -57,6 +64,28 @@ winners = remerge.run(corpus, 100, method=remerge.SelectionMethod.npmi, min_coun
 | rescore_interval | `int`, optional             | Number of iterations between full candidate rescoring for LL/NPMI methods. `1` forces full rescoring every iteration; higher values trade exactness for speed. Defaults to `25`.                                                                                                             |
 | on_exhausted | `ExhaustionPolicy`, optional   | Behavior when no candidate passes filters (or threshold): "stop" returns winners collected so far, "raise" raises `NoCandidateBigramError`. Defaults to "stop".                                                                                                                              |
 | min_score    | `Optional[float]`, optional    | Optional minimum score threshold for the selected winner. If the best candidate is below this threshold, behavior follows `on_exhausted`. Defaults to None.                                                                                                                                   |
+
+`run()` returns `list[WinnerInfo]`. Each `WinnerInfo` contains:
+- `bigram`
+- `merged_lexeme`
+- `score`
+- `merge_token_count`
+
+#### API - `remerge.annotate`
+
+`annotate()` returns `(winners, annotated_docs, labels)` and uses the same `WinnerInfo`
+shape as `run()`.
+
+Tokenization and annotation output normalization:
+- Input text is tokenized with Rust `split_whitespace()`.
+- Original whitespace formatting is not preserved.
+- `annotate()` reconstructs output with normalized single-space token joins within each segment.
+
+Performance and scaling notes:
+- Internal bigram/lexeme location tracking is memory-intensive by design.
+- Prefer setting `min_count` above `0` for large corpora and especially for `npmi`.
+- Keep `iterations` practical for corpus size and use case.
+- `rescore_interval=1` gives exact LL/NPMI rescoring each iteration; larger values trade some exactness for speed.
 
 #### Install
 
@@ -168,7 +197,7 @@ uv version --bump minor --frozen
 ```
 
    Then set `Cargo.toml` `[package].version` to match the new `pyproject.toml` version.
-   Important: pushing a matching git tag (for example `v0.3.0`) triggers
+   Important: pushing a matching git tag (for example `v0.4.0`) triggers
    `.github/workflows/release.yml`; for tag-triggered runs,
    the workflow will publish to PyPI after build and validation succeed.
 2. Commit and push to `main`.

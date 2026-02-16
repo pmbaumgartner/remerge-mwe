@@ -18,7 +18,7 @@ class StepResult:
     @property
     def merged_ix(self) -> int: ...
     @property
-    def bigram_locations(self) -> list[tuple[int, int]]: ...
+    def merge_token_count(self) -> int: ...
 
 RunOutcome = tuple[int, list[StepResult], float | None, int]
 AnnotateRunOutcome = tuple[
@@ -37,7 +37,7 @@ class Engine:
         method: str,
         min_count: int,
         splitter: str = "delimiter",
-        line_delimiter: str | None = None,
+        line_delimiter: str | None = "\n",
         sentencex_language: str = "en",
         rescore_interval: int = 25,
     ) -> None: ...
