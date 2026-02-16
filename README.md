@@ -215,6 +215,14 @@ git push origin vX.Y.Z
    - publish job succeeds via `uv publish`
 5. Confirm artifacts on PyPI:
    - https://pypi.org/project/remerge-mwe/
+6. Run the PyPI smoke script against the latest published version:
+
+```bash
+uv run --no-project --upgrade bin/pypi-smoke.py
+```
+
+   This command forces dependency refresh and avoids local project resolution, so
+   `bin/pypi-smoke.py` validates the newest package available on PyPI.
 
 Manual dry-run/backfill:
 - Trigger `Release` via `workflow_dispatch`.

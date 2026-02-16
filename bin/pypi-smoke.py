@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#   "remerge-mwe>=0.3.1",
+#   "remerge-mwe",
 # ]
 # ///
 
