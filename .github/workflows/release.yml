@@ -102,7 +102,11 @@ jobs:
 
       - name: Smoke test wheel install
         run: |
-          uv run --isolated --no-project --with dist/*.whl -- python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency')[0].merged_lexeme.word == ('a', 'b')"
+          python -m venv .wheel-smoke
+          . .wheel-smoke/bin/activate
+          python -m pip install --upgrade pip
+          pip install --no-index --find-links dist remerge-mwe
+          python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency')[0].merged_lexeme.word == ('a', 'b')"
 
       - name: Smoke test sdist install
         run: |
