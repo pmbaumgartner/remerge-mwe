@@ -34,8 +34,6 @@ jobs:
         include:
           - name: linux-x86_64
             runner: ubuntu-latest
-          - name: linux-aarch64
-            runner: ubuntu-24.04-arm
           - name: macos-aarch64
             runner: macos-14
           - name: windows-x86_64
@@ -47,7 +45,15 @@ jobs:
           python-version: "3.12"
       - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v7
+      - name: Build wheel (linux manylinux)
+        if: matrix.name == 'linux-x86_64'
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64-unknown-linux-gnu
+          manylinux: auto
+          args: --release --out dist --find-interpreter --features python-extension
       - name: Build wheel
+        if: matrix.name != 'linux-x86_64'
         run: uv build --wheel --no-sources
 
       - name: Upload wheel artifacts
