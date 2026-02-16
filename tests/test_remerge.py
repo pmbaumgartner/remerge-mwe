@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 from remerge import __version__, annotate, run
 from remerge.core import (
+    Engine,
     ExhaustionPolicy,
     Lexeme,
     NoCandidateBigramError,
@@ -110,6 +111,16 @@ def test_methods(method, min_count):
     corpus = ["a b a b c", "a b d e"]
     winners = run(corpus, 2, method=method, min_count=min_count)
     assert len(winners) == 2
+
+
+@pytest.mark.fast
+def test_corpus_length_matches_segment_count():
+    corpus = ["a b\nc d\ne f"]
+    engine = Engine(corpus, "frequency", 0, "delimiter", "\n", "en", 25)
+    assert engine.corpus_length() == 3
+
+    engine_no_delim = Engine(["a b c"], "frequency", 0, "delimiter", None, "en", 25)
+    assert engine_no_delim.corpus_length() == 1
 
 
 @pytest.mark.fast

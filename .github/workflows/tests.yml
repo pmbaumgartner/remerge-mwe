@@ -62,3 +62,4 @@ jobs:
       - run: uv sync --all-groups --frozen
       - run: uv run --with maturin maturin develop
       - run: uv run --no-sync pytest -v -m "corpus or parity"
+      - run: REMERGE_PERF_GUARD=1 REMERGE_PERF_ITERATIONS=5 REMERGE_PERF_MAX_SECONDS=25.0 uv run --no-sync pytest -q tests/test_performance_guard.py

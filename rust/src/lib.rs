@@ -1443,6 +1443,7 @@ fn _core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn build_engine(
         corpus: Vec<&str>,
@@ -1476,6 +1477,17 @@ mod tests {
         };
         engine.refresh_candidate_state(true);
         engine
+    }
+
+    fn total_root_count(engine: &Engine) -> usize {
+        (0..engine.lexemes.corpus_length())
+            .map(|line_ix| {
+                engine
+                    .lexemes
+                    .root_items_for_line(line_ix, &engine.lexeme_store)
+                    .len()
+            })
+            .sum()
     }
 
     #[test]
@@ -1743,5 +1755,30 @@ mod tests {
         assert_eq!(first_ids, second_ids);
         assert_eq!(after_first_len, pre_len + first_ids.len());
         assert_eq!(after_second_len, after_first_len);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(48))]
+
+        #[test]
+        fn total_root_count_changes_only_on_winner(corpus in "[a-c ]{5,30}") {
+            let mut engine = build_engine(
+                vec![corpus.as_str()],
+                SelectionMethod::Frequency,
+                0,
+                DEFAULT_RESCORE_INTERVAL,
+            );
+
+            let before = total_root_count(&engine);
+            let status = engine.step_internal(None);
+            let after = total_root_count(&engine);
+
+            match status {
+                StepStatus::Winner(_) => prop_assert!(after < before),
+                StepStatus::NoCandidate | StepStatus::BelowMinScore(_) => {
+                    prop_assert_eq!(after, before)
+                }
+            }
+        }
     }
 }

@@ -169,7 +169,7 @@ uv version --bump minor --frozen
 
    Then set `Cargo.toml` `[package].version` to match the new `pyproject.toml` version.
    Important: pushing a matching git tag (for example `v0.3.0`) triggers
-   `/Users/peter/projects/remerge-mwe/.github/workflows/release.yml`; for tag-triggered runs,
+   `.github/workflows/release.yml`; for tag-triggered runs,
    the workflow will publish to PyPI after build and validation succeed.
 2. Commit and push to `main`.
 3. Create and push a release tag matching that version:

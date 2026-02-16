@@ -8,7 +8,7 @@ message: >-
   metadata from this file.
 type: software
 authors:
-  - given-names: ' Peter'
+  - given-names: 'Peter'
     family-names: Baumgartner
 identifiers:
   - type: url
