@@ -90,7 +90,10 @@ struct Interner {
 }
 
 impl Interner {
-    fn from_documents(documents: &[String], splitter: Splitter<'_>) -> (Self, Vec<Vec<TokenId>>) {
+    fn from_documents(
+        documents: &[String],
+        splitter: Splitter<'_>,
+    ) -> (Self, Vec<Vec<TokenId>>, Vec<usize>) {
         let mut uniq = HashSet::new();
         for document in documents {
             match splitter {
@@ -126,7 +129,9 @@ impl Interner {
         }
 
         let mut corpus_ids = Vec::new();
+        let mut doc_boundaries = Vec::with_capacity(documents.len() + 1);
         for document in documents {
+            doc_boundaries.push(corpus_ids.len());
             match splitter {
                 Splitter::Delimiter(Some(delim)) => {
                     for segment in document.split(delim) {
@@ -161,8 +166,9 @@ impl Interner {
                 }
             }
         }
+        doc_boundaries.push(corpus_ids.len());
 
-        (interner, corpus_ids)
+        (interner, corpus_ids, doc_boundaries)
     }
 
     fn id_for(&self, value: &str) -> TokenId {
@@ -196,11 +202,13 @@ struct LexemeData {
     lexemes_to_locations: HashMap<Lexeme, HashSet<Location>>,
     locations_to_lexemes: Vec<Vec<Lexeme>>,
     lexemes_to_freqs: HashMap<Lexeme, i64>,
+    doc_boundaries: Vec<usize>,
 }
 
 impl LexemeData {
-    fn from_corpus(corpus: &[Vec<TokenId>]) -> Self {
+    fn from_corpus(corpus: &[Vec<TokenId>], doc_boundaries: Vec<usize>) -> Self {
         let mut lexeme_data = Self::default();
+        lexeme_data.doc_boundaries = doc_boundaries;
         for (line_ix, tokens) in corpus.iter().enumerate() {
             let mut line_lexemes = Vec::with_capacity(tokens.len());
             for (word_ix, word) in tokens.iter().enumerate() {
@@ -792,6 +800,7 @@ struct Engine {
     interner: Interner,
     lexemes: LexemeData,
     bigrams: BigramData,
+    segment_delimiter: String,
     method: SelectionMethod,
     min_count: i64,
     tie_breaker: TieBreaker,
@@ -933,6 +942,55 @@ impl Engine {
         )
     }
 
+    fn annotate_corpus_internal(
+        &self,
+        mwe_prefix: &str,
+        mwe_suffix: &str,
+        token_separator: &str,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut annotated_documents =
+            Vec::with_capacity(self.lexemes.doc_boundaries.len().saturating_sub(1));
+        let mut mwe_labels = HashSet::new();
+
+        for boundary in self.lexemes.doc_boundaries.windows(2) {
+            let start = boundary[0];
+            let end = boundary[1];
+            let mut annotated_segments = Vec::with_capacity(end.saturating_sub(start));
+
+            for line_ix in start..end {
+                let mut annotated_tokens = Vec::new();
+
+                for lexeme in &self.lexemes.locations_to_lexemes[line_ix] {
+                    if lexeme.ix > 0 {
+                        continue;
+                    }
+
+                    if lexeme.word.len() > 1 {
+                        let lexeme_tokens = self.token_ids_to_strings(&lexeme.word);
+                        let label = format!(
+                            "{mwe_prefix}{}{mwe_suffix}",
+                            lexeme_tokens.join(token_separator)
+                        );
+                        mwe_labels.insert(label.clone());
+                        annotated_tokens.push(label);
+                        continue;
+                    }
+
+                    let token = self.token_ids_to_strings(&lexeme.word).join("");
+                    annotated_tokens.push(token);
+                }
+
+                annotated_segments.push(annotated_tokens.join(" "));
+            }
+
+            annotated_documents.push(annotated_segments.join(&self.segment_delimiter));
+        }
+
+        let mut sorted_labels = mwe_labels.into_iter().collect::<Vec<_>>();
+        sorted_labels.sort_unstable();
+        (annotated_documents, sorted_labels)
+    }
+
     fn step_internal(&mut self, min_score: Option<f64>) -> StepStatus {
         self.refresh_candidate_scores(false);
 
@@ -1008,6 +1066,14 @@ type StepPayload = (
 );
 
 type RunOutcome = (String, Vec<StepPayload>, Option<f64>, usize);
+type AnnotateRunOutcome = (
+    String,
+    Vec<StepPayload>,
+    Option<f64>,
+    usize,
+    Vec<String>,
+    Vec<String>,
+);
 
 #[pymethods]
 impl Engine {
@@ -1033,9 +1099,14 @@ impl Engine {
         let method = SelectionMethod::parse(method)?;
         let tie_breaker = TieBreaker::parse(tie_breaker)?;
         let splitter = Splitter::parse(splitter, line_delimiter, sentencex_language)?;
-        let (interner, corpus_ids) = Interner::from_documents(&corpus, splitter);
+        let segment_delimiter = match splitter {
+            Splitter::Delimiter(Some(delim)) => delim.to_string(),
+            Splitter::Delimiter(None) => String::new(),
+            Splitter::Sentencex { .. } => " ".to_string(),
+        };
+        let (interner, corpus_ids, doc_boundaries) = Interner::from_documents(&corpus, splitter);
 
-        let lexemes = LexemeData::from_corpus(&corpus_ids);
+        let lexemes = LexemeData::from_corpus(&corpus_ids, doc_boundaries);
         let track_first_seen = tie_breaker == TieBreaker::LegacyFirstSeen;
         let bigrams = BigramData::from_lexemes(&lexemes, track_first_seen);
 
@@ -1043,6 +1114,7 @@ impl Engine {
             interner,
             lexemes,
             bigrams,
+            segment_delimiter,
             method,
             min_count: min_count as i64,
             tie_breaker,
@@ -1065,6 +1137,38 @@ impl Engine {
     ) -> RunOutcome {
         py.allow_threads(|| self.run_internal(iterations, min_score))
     }
+
+    #[pyo3(signature = (
+        iterations,
+        min_score=None,
+        mwe_prefix="<mwe:",
+        mwe_suffix=">",
+        token_separator="_",
+    ))]
+    fn run_and_annotate(
+        &mut self,
+        py: Python<'_>,
+        iterations: usize,
+        min_score: Option<f64>,
+        mwe_prefix: &str,
+        mwe_suffix: &str,
+        token_separator: &str,
+    ) -> AnnotateRunOutcome {
+        py.allow_threads(|| {
+            let (status, payloads, selected_score, corpus_length) =
+                self.run_internal(iterations, min_score);
+            let (annotated_docs, mwe_labels) =
+                self.annotate_corpus_internal(mwe_prefix, mwe_suffix, token_separator);
+            (
+                status,
+                payloads,
+                selected_score,
+                corpus_length,
+                annotated_docs,
+                mwe_labels,
+            )
+        })
+    }
 }
 
 #[pymodule(gil_used = true)]
@@ -1080,15 +1184,16 @@ mod tests {
     fn build_engine(corpus: Vec<&str>, method: SelectionMethod, min_count: i64) -> Engine {
         let corpus = corpus.into_iter().map(str::to_string).collect::<Vec<_>>();
 
-        let (interner, corpus_ids) =
+        let (interner, corpus_ids, doc_boundaries) =
             Interner::from_documents(&corpus, Splitter::Delimiter(Some("\n")));
-        let lexemes = LexemeData::from_corpus(&corpus_ids);
+        let lexemes = LexemeData::from_corpus(&corpus_ids, doc_boundaries);
         let bigrams = BigramData::from_lexemes(&lexemes, false);
 
         Engine {
             interner,
             lexemes,
             bigrams,
+            segment_delimiter: "\n".to_string(),
             method,
             min_count,
             tie_breaker: TieBreaker::Deterministic,
@@ -1101,7 +1206,7 @@ mod tests {
     #[test]
     fn interner_roundtrip() {
         let corpus = vec!["b a b".to_string()];
-        let (interner, corpus_ids) =
+        let (interner, corpus_ids, doc_boundaries) =
             Interner::from_documents(&corpus, Splitter::Delimiter(Some("\n")));
         let ids = vec![interner.id_for("a"), interner.id_for("b")];
         assert_eq!(interner.ids_to_strings(&ids), vec!["a", "b"]);
@@ -1114,6 +1219,7 @@ mod tests {
                 interner.id_for("b")
             ]]
         );
+        assert_eq!(doc_boundaries, vec![0, 1]);
     }
 
     #[test]

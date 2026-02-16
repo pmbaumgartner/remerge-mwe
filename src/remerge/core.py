@@ -136,6 +136,31 @@ def _winner_from_payload(payload: StepPayload) -> tuple[WinnerInfo, float]:
     return winner, selected_score
 
 
+def _make_engine(
+    corpus: list[str],
+    method: SelectionMethod | str,
+    min_count: int,
+    tie_breaker: TieBreaker | str,
+    splitter: Splitter | str,
+    line_delimiter: str | None,
+    sentencex_language: str,
+) -> tuple[Engine, SelectionMethod, TieBreaker, Splitter]:
+    method = _coerce_enum(method, SelectionMethod, "method")
+    splitter = _coerce_enum(splitter, Splitter, "splitter")
+    tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
+
+    engine = Engine(
+        corpus,
+        method.value,
+        min_count,
+        tie_breaker.value,
+        splitter.value,
+        line_delimiter,
+        sentencex_language,
+    )
+    return engine, method, tie_breaker, splitter
+
+
 def run(
     corpus: list[str],
     iterations: int,
@@ -152,20 +177,16 @@ def run(
     min_score: float | None = None,
 ) -> list[WinnerInfo]:
     """Run the remerge algorithm."""
-    method = _coerce_enum(method, SelectionMethod, "method")
-    splitter = _coerce_enum(splitter, Splitter, "splitter")
-    tie_breaker = _coerce_enum(tie_breaker, TieBreaker, "tie_breaker")
-    on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
-
-    engine = Engine(
+    engine, method, _tie_breaker, _splitter = _make_engine(
         corpus,
-        method.value,
+        method,
         min_count,
-        tie_breaker.value,
-        splitter.value,
+        tie_breaker,
+        splitter,
         line_delimiter,
         sentencex_language,
     )
+    on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
     if output is not None:
         print(f"Outputting winning merged lexemes to '{output}'")
@@ -203,3 +224,68 @@ def run(
             output.write_text(json.dumps(winner_lexemes))
 
     return winners
+
+
+def annotate(
+    corpus: list[str],
+    iterations: int,
+    *,
+    method: SelectionMethod | str = SelectionMethod.log_likelihood,
+    min_count: int = 0,
+    splitter: Splitter | str = Splitter.delimiter,
+    line_delimiter: str | None = "\n",
+    sentencex_language: str = "en",
+    tie_breaker: TieBreaker | str = TieBreaker.deterministic,
+    on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
+    min_score: float | None = None,
+    mwe_prefix: str = "<mwe:",
+    mwe_suffix: str = ">",
+    token_separator: str = "_",
+) -> tuple[list[WinnerInfo], list[str], list[str]]:
+    """Run the remerge algorithm and annotate the merged corpus."""
+    engine, method, _tie_breaker, _splitter = _make_engine(
+        corpus,
+        method,
+        min_count,
+        tie_breaker,
+        splitter,
+        line_delimiter,
+        sentencex_language,
+    )
+    on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
+
+    (
+        status,
+        payloads,
+        selected_score,
+        _corpus_length,
+        annotated_docs,
+        mwe_labels,
+    ) = engine.run_and_annotate(
+        iterations,
+        min_score,
+        mwe_prefix,
+        mwe_suffix,
+        token_separator,
+    )
+
+    if status == "no_candidate" and on_exhausted is ExhaustionPolicy.raise_:
+        raise NoCandidateBigramError(
+            f"No candidate bigrams available for method={method.value!r} "
+            f"and min_count={min_count}."
+        )
+
+    if status == "below_min_score" and on_exhausted is ExhaustionPolicy.raise_:
+        raise NoCandidateBigramError(
+            f"Best candidate score ({selected_score}) is below min_score ({min_score})."
+        )
+
+    if status not in {"completed", "no_candidate", "below_min_score"}:
+        raise RuntimeError(f"Unexpected engine status {status!r}.")
+
+    winners: list[WinnerInfo] = []
+    for payload in payloads:
+        winner, _ = _winner_from_payload(payload)
+        winners.append(winner)
+
+    return winners, annotated_docs, mwe_labels

@@ -12,6 +12,14 @@ StepPayload = tuple[
 ]
 
 RunOutcome = tuple[str, list[StepPayload], Optional[float], int]
+AnnotateRunOutcome = tuple[
+    str,
+    list[StepPayload],
+    Optional[float],
+    int,
+    list[str],
+    list[str],
+]
 
 class Engine:
     def __init__(
@@ -30,3 +38,11 @@ class Engine:
         iterations: int,
         min_score: Optional[float] = None,
     ) -> RunOutcome: ...
+    def run_and_annotate(
+        self,
+        iterations: int,
+        min_score: Optional[float] = None,
+        mwe_prefix: str = "<mwe:",
+        mwe_suffix: str = ">",
+        token_separator: str = "_",
+    ) -> AnnotateRunOutcome: ...
