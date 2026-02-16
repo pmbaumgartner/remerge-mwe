@@ -1,6 +1,6 @@
 [project]
 name = "remerge-mwe"
-version = "0.2.1"
+version = "0.3.0"
 description = "REMERGE is a Multi-Word Expression (MWE) discovery algorithm derived from the MERGE algorithm."
 authors = [{name = "Peter Baumgartner", email = "5107405+pmbaumgartner@users.noreply.github.com"}]
 readme = "README.md"
