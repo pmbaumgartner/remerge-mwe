@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+import sys
 from typing import TypeVar
 
 from ._core import (
@@ -39,6 +40,17 @@ class Lexeme:
     def __repr__(self) -> str:
         return f"({self.word}|{self.ix})"
 
+    def __str__(self) -> str:
+        return self.text
+
+    @property
+    def text(self) -> str:
+        return " ".join(self.word)
+
+    @property
+    def token_count(self) -> int:
+        return len(self.word)
+
 
 Bigram = tuple[Lexeme, Lexeme]
 
@@ -49,6 +61,17 @@ class WinnerInfo:
     merged_lexeme: Lexeme
     score: float
     merge_token_count: int
+
+    def __str__(self) -> str:
+        return self.text
+
+    @property
+    def text(self) -> str:
+        return str(self.merged_lexeme)
+
+    @property
+    def token_count(self) -> int:
+        return self.n_lexemes
 
     @property
     def n_lexemes(self) -> int:
@@ -165,6 +188,55 @@ def _run_core(
     return engine, method, _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
 
+def _validate_progress_arg(progress: bool) -> None:
+    if not isinstance(progress, bool):
+        raise TypeError("progress must be a bool.")
+
+
+def _render_progress(completed: int, requested: int) -> None:
+    sys.stderr.write(f"\rremerge progress: {completed}/{requested}")
+    sys.stderr.flush()
+
+
+def _run_with_optional_progress(
+    engine: Engine,
+    *,
+    iterations: int,
+    min_score: float | None,
+    progress: bool,
+) -> tuple[int, list[StepResult], float | None, int]:
+    if not progress:
+        return engine.run(iterations, min_score)
+
+    remaining = iterations
+    completed = 0
+    status = STATUS_COMPLETED
+    selected_score = None
+    all_steps = []
+    corpus_length = engine.corpus_length()
+
+    while remaining > 0:
+        batch_size = 1
+        status, step_results, selected_score, _corpus_length = engine.run(
+            batch_size,
+            min_score,
+        )
+        if step_results:
+            all_steps.extend(step_results)
+            completed += len(step_results)
+            _render_progress(completed, iterations)
+        remaining -= batch_size
+
+        if status != STATUS_COMPLETED:
+            if completed > 0:
+                sys.stderr.write("\n")
+            return status, all_steps, selected_score, corpus_length
+
+    if completed > 0:
+        sys.stderr.write("\n")
+    return status, all_steps, selected_score, corpus_length
+
+
 def run(
     corpus: list[str],
     iterations: int,
@@ -177,6 +249,7 @@ def run(
     rescore_interval: int = 25,
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
     min_score: float | None = None,
+    progress: bool = False,
 ) -> list[WinnerInfo]:
     """Run the remerge algorithm.
 
@@ -188,6 +261,7 @@ def run(
     """
     if iterations < 0:
         raise ValueError("iterations must be greater than or equal to 0.")
+    _validate_progress_arg(progress)
 
     engine, method, on_exhausted = _run_core(
         corpus,
@@ -200,8 +274,11 @@ def run(
         on_exhausted=on_exhausted,
     )
 
-    status, step_results, selected_score, _corpus_length = engine.run(
-        iterations, min_score
+    status, step_results, selected_score, _corpus_length = _run_with_optional_progress(
+        engine,
+        iterations=iterations,
+        min_score=min_score,
+        progress=progress,
     )
     _check_engine_status(
         status,
@@ -226,6 +303,7 @@ def annotate(
     rescore_interval: int = 25,
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
     min_score: float | None = None,
+    progress: bool = False,
     mwe_prefix: str = "<mwe:",
     mwe_suffix: str = ">",
     token_separator: str = "_",
@@ -238,6 +316,7 @@ def annotate(
     """
     if iterations < 0:
         raise ValueError("iterations must be greater than or equal to 0.")
+    _validate_progress_arg(progress)
 
     engine, method, on_exhausted = _run_core(
         corpus,
@@ -250,19 +329,36 @@ def annotate(
         on_exhausted=on_exhausted,
     )
 
-    (
-        status,
-        step_results,
-        selected_score,
-        _corpus_length,
-        annotated_docs,
-        mwe_labels,
-    ) = engine.run_and_annotate(
-        iterations,
-        min_score,
-        mwe_prefix,
-        mwe_suffix,
-        token_separator,
+    if not progress:
+        (
+            status,
+            step_results,
+            selected_score,
+            _corpus_length,
+            annotated_docs,
+            mwe_labels,
+        ) = engine.run_and_annotate(
+            iterations,
+            min_score,
+            mwe_prefix,
+            mwe_suffix,
+            token_separator,
+        )
+        _check_engine_status(
+            status,
+            selected_score=selected_score,
+            min_score=min_score,
+            on_exhausted=on_exhausted,
+            method=method,
+            min_count=min_count,
+        )
+        return _collect_winners(step_results), annotated_docs, mwe_labels
+
+    status, step_results, selected_score, _corpus_length = _run_with_optional_progress(
+        engine,
+        iterations=iterations,
+        min_score=min_score,
+        progress=progress,
     )
     _check_engine_status(
         status,
@@ -271,5 +367,19 @@ def annotate(
         on_exhausted=on_exhausted,
         method=method,
         min_count=min_count,
+    )
+    (
+        _status,
+        _unused_step_results,
+        _unused_selected_score,
+        _unused_corpus_length,
+        annotated_docs,
+        mwe_labels,
+    ) = engine.run_and_annotate(
+        0,
+        None,
+        mwe_prefix,
+        mwe_suffix,
+        token_separator,
     )
     return _collect_winners(step_results), annotated_docs, mwe_labels

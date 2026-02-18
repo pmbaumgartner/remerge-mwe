@@ -49,6 +49,20 @@ def test_winner_shape():
 
 
 @pytest.mark.fast
+def test_lexeme_and_winner_string_helpers():
+    lexeme = Lexeme(("a", "b"), 0)
+    assert str(lexeme) == "a b"
+    assert lexeme.text == "a b"
+    assert lexeme.token_count == 2
+
+    winner = run(["a b c"], 1, method="frequency")[0]
+    assert str(winner) == "a b"
+    assert winner.text == "a b"
+    assert winner.token_count == 2
+    assert winner.n_lexemes == 2
+
+
+@pytest.mark.fast
 def test_winnerinfo_redundant_location_helpers_removed():
     winner = run(["a b c"], 1, method="frequency")[0]
     assert not hasattr(winner, "bigram_locations")
@@ -112,6 +126,57 @@ def test_methods(method, min_count):
     corpus = ["a b a b c", "a b d e"]
     winners = run(corpus, 2, method=method, min_count=min_count)
     assert len(winners) == 2
+
+
+@pytest.mark.fast
+@pytest.mark.parametrize(
+    "method,min_count",
+    [
+        ("frequency", 0),
+        ("log_likelihood", 0),
+        ("npmi", 0),
+    ],
+)
+def test_run_progress_parity(method, min_count, capsys):
+    corpus = ["a b a c a b a c", "a b a c"]
+    baseline = run(corpus, 3, method=method, min_count=min_count)
+    capsys.readouterr()
+    progress_winners = run(
+        corpus,
+        3,
+        method=method,
+        min_count=min_count,
+        progress=True,
+    )
+    stderr = capsys.readouterr().err
+
+    assert progress_winners == baseline
+    if progress_winners:
+        assert "remerge progress:" in stderr
+        assert f"{len(progress_winners)}/3" in stderr
+    else:
+        assert stderr == ""
+
+
+@pytest.mark.fast
+def test_annotate_progress_parity(capsys):
+    corpus = ["a b a b c d c d"]
+    baseline = annotate(corpus, 2, method="frequency")
+    capsys.readouterr()
+    progress_result = annotate(
+        corpus,
+        2,
+        method="frequency",
+        progress=True,
+    )
+    stderr = capsys.readouterr().err
+
+    assert progress_result == baseline
+    if progress_result[0]:
+        assert "remerge progress:" in stderr
+        assert f"{len(progress_result[0])}/2" in stderr
+    else:
+        assert stderr == ""
 
 
 @pytest.mark.fast
@@ -454,6 +519,15 @@ def test_iterations_validation_for_run_and_annotate():
 
     with pytest.raises(ValueError):
         annotate(["a b a b"], -1)
+
+
+@pytest.mark.fast
+def test_progress_validation_for_run_and_annotate():
+    with pytest.raises(TypeError):
+        run(["a b a b"], 1, progress=1)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError):
+        annotate(["a b a b"], 1, progress=1)  # type: ignore[arg-type]
 
 
 @pytest.mark.fast
