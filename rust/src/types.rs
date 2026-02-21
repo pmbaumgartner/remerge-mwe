@@ -22,6 +22,9 @@ pub(crate) enum SelectionMethod {
     Frequency,
     LogLikelihood,
     Npmi,
+    LogDice,
+    TScore,
+    DeltaP,
 }
 
 impl SelectionMethod {
@@ -30,8 +33,49 @@ impl SelectionMethod {
             "frequency" => Ok(Self::Frequency),
             "log_likelihood" => Ok(Self::LogLikelihood),
             "npmi" => Ok(Self::Npmi),
+            "logdice" => Ok(Self::LogDice),
+            "t_score" | "tscore" => Ok(Self::TScore),
+            "delta_p" | "deltap" => Ok(Self::DeltaP),
             _ => Err(PyValueError::new_err(format!(
-                "Invalid method {value:?}. Expected one of: 'frequency', 'log_likelihood', 'npmi'."
+                "Invalid method {value:?}. Expected one of: 'frequency', 'log_likelihood', 'npmi', 'logdice', 't_score', 'delta_p'."
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SearchStrategy {
+    Greedy,
+    Beam,
+}
+
+impl SearchStrategy {
+    pub(crate) fn parse(value: &str) -> PyResult<Self> {
+        match value {
+            "greedy" => Ok(Self::Greedy),
+            "beam" => Ok(Self::Beam),
+            _ => Err(PyValueError::new_err(format!(
+                "Invalid search_strategy {value:?}. Expected one of: 'greedy', 'beam'."
+            ))),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum StopwordPolicy {
+    None,
+    BlockStopwordStopword,
+    BlockAnyStopword,
+}
+
+impl StopwordPolicy {
+    pub(crate) fn parse(value: &str) -> PyResult<Self> {
+        match value {
+            "none" => Ok(Self::None),
+            "block_stopword_stopword" => Ok(Self::BlockStopwordStopword),
+            "block_any_stopword" => Ok(Self::BlockAnyStopword),
+            _ => Err(PyValueError::new_err(format!(
+                "Invalid stopword_policy {value:?}. Expected one of: 'none', 'block_stopword_stopword', 'block_any_stopword'."
             ))),
         }
     }

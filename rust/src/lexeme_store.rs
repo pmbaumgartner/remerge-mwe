@@ -8,7 +8,7 @@ pub(crate) struct Lexeme {
     pub(crate) ix: usize,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct LexemeStore {
     lexeme_to_id: FxHashMap<Lexeme, LexemeId>,
     pub(crate) id_to_lexeme: Vec<Lexeme>,

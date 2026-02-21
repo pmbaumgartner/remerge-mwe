@@ -47,6 +47,9 @@ print(winner.score)              # score used for winner selection
 Available winner-selection methods:
 - `"log_likelihood"` (default; [Log-Likelihood / G²][^5])
 - `"npmi"` ([Normalized PMI][^4])
+- `"logdice"`
+- `"t_score"`
+- `"delta_p"` (symmetric ΔP)
 - `"frequency"`
 
 You can pass either enum values (`remerge.SelectionMethod.frequency`) or strings (`"frequency"`).
@@ -83,15 +86,30 @@ winners = remerge.run(corpus, 500, progress=True)
 | --- | --- | --- |
 | `corpus` | `list[str]` | Corpus of document strings. Documents are split into segments by `splitter`, then tokenized with Rust whitespace splitting. |
 | `iterations` | `int` | Maximum number of iterations. |
-| `method` | `SelectionMethod | str`, optional | One of `"frequency"`, `"log_likelihood"`, `"npmi"`. Default: `"log_likelihood"`. |
+| `method` | `SelectionMethod | str`, optional | One of `"frequency"`, `"log_likelihood"`, `"npmi"`, `"logdice"`, `"t_score"`, `"delta_p"`. Default: `"log_likelihood"`. |
 | `min_count` | `int`, optional | Minimum bigram frequency required to be considered for winner selection. Default: `0`. |
 | `splitter` | `Splitter | str`, optional | Segmenter before tokenization: `"delimiter"` (default) or `"sentencex"`. |
 | `line_delimiter` | `str | None`, optional | Delimiter for `splitter="delimiter"`. Default: `"\n"`. Use `None` to treat each document as one segment. Ignored for `sentencex`. |
 | `sentencex_language` | `str`, optional | Language code for `splitter="sentencex"`. Default: `"en"`. |
 | `rescore_interval` | `int`, optional | Full-rescore interval for LL/NPMI. `1` means full rescore every iteration; larger values trade exactness for speed. Default: `25`. |
+| `min_range` | `int`, optional | Minimum number of distinct segments a candidate bigram must appear in. Default: `1` (disabled). |
+| `range_alpha` | `float`, optional | Soft segment-dispersion penalty strength. `0.0` disables; higher values favor candidates spread across segments. Default: `0.0`. |
+| `min_p_ab` | `float | None`, optional | Conditional-probability gate for `P(B|A)`. Must be in `[0,1]` when set. Default: `None`. |
+| `min_p_ba` | `float | None`, optional | Conditional-probability gate for `P(A|B)`. Must be in `[0,1]` when set. Default: `None`. |
+| `min_merge_count` | `int`, optional | Selection-time gate on non-overlapping merge applications for a candidate. Default: `1`. |
+| `min_winner_score_output` | `float | None`, optional | Output-only winner filter by score. Does not affect selection. Default: `None`. |
+| `min_winner_range_output` | `int`, optional | Output-only winner filter by segment range. Default: `1`. |
+| `search_strategy` | `SearchStrategy | str`, optional | `"greedy"` (default) or `"beam"`. |
+| `beam_width` | `int`, optional | Beam width when `search_strategy=\"beam\"`. Default: `1`. |
+| `beam_top_m` | `int`, optional | Candidate expansion cap per beam state. Default: `8`. |
+| `consensus_runs` | `list[ConsensusRunSpec | dict[str, object]] | None`, optional | If provided, run member specs and keep phrases meeting consensus support thresholds. |
+| `consensus_min_run_support` | `int`, optional | Minimum number of member runs supporting a phrase. Default: `2`. |
+| `consensus_min_method_support` | `int`, optional | Minimum number of distinct methods supporting a phrase. Default: `1`. |
 | `on_exhausted` | `ExhaustionPolicy | str`, optional | Behavior when no candidate is available (or score threshold not met): `"stop"` or `"raise"`. Default: `"stop"`. |
 | `min_score` | `float | None`, optional | Optional minimum score threshold for selected winners. Default: `None`. |
 | `progress` | `bool`, optional | If `True`, prints live merge progress to `stderr`. Default: `False`. |
+
+`min_score` is a selection-time stop threshold. `min_winner_score_output` and `min_winner_range_output` only filter returned winner metadata.
 
 `run()` returns `list[WinnerInfo]`.
 
@@ -100,6 +118,7 @@ Each `WinnerInfo` contains:
 - `merged_lexeme`
 - `score`
 - `merge_token_count`
+- `merge_segment_range`
 
 Convenience helpers:
 - `str(winner)` and `winner.text` for merged phrase text
@@ -122,12 +141,19 @@ Where:
 
 Arguments shared with `run()`:
 - `corpus`, `iterations`, `method`, `min_count`, `splitter`, `line_delimiter`
-- `sentencex_language`, `rescore_interval`, `on_exhausted`, `min_score`, `progress`
+- `sentencex_language`, `rescore_interval`, `min_range`, `range_alpha`
+- `min_p_ab`, `min_p_ba`, `min_merge_count`
+- `min_winner_score_output`, `min_winner_range_output`
+- `search_strategy`, `beam_width`, `beam_top_m`
+- `consensus_runs`, `consensus_min_run_support`, `consensus_min_method_support`
+- `on_exhausted`, `min_score`, `progress`
 
 `annotate()`-specific arguments:
 - `mwe_prefix: str = "<mwe:"`
 - `mwe_suffix: str = ">"`
 - `token_separator: str = "_"`
+
+When `consensus_runs` is set, `annotate()` returns consensus lexicon rematch annotations over normalized original tokenization (not a single member run's merged trajectory).
 
 ## Tokenization and output normalization
 

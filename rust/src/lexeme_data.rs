@@ -3,7 +3,7 @@ use crate::types::{LexemeId, Location, TokenId};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::smallvec;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct LexemeData {
     pub(crate) lexemes_to_locations: FxHashMap<LexemeId, FxHashSet<Location>>,
     pub(crate) locations_to_lexemes: Vec<Vec<LexemeId>>,

@@ -19,6 +19,8 @@ class StepResult:
     def merged_ix(self) -> int: ...
     @property
     def merge_token_count(self) -> int: ...
+    @property
+    def merge_segment_range(self) -> int: ...
 
 RunOutcome = tuple[int, list[StepResult], float | None, int]
 AnnotateRunOutcome = tuple[
@@ -40,6 +42,17 @@ class Engine:
         line_delimiter: str | None = "\n",
         sentencex_language: str = "en",
         rescore_interval: int = 25,
+        stopwords: list[str] | None = None,
+        stopword_policy: str = "none",
+        block_punct_only: bool = False,
+        min_range: int = 1,
+        range_alpha: float = 0.0,
+        min_p_ab: float | None = None,
+        min_p_ba: float | None = None,
+        min_merge_count: int = 1,
+        search_strategy: str = "greedy",
+        beam_width: int = 1,
+        beam_top_m: int = 8,
     ) -> None: ...
     def corpus_length(self) -> int: ...
     def run(

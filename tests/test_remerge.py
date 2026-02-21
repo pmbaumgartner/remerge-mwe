@@ -6,12 +6,14 @@ from pathlib import Path
 import pytest
 from remerge import __version__, annotate, run
 from remerge.core import (
+    ConsensusRunSpec,
     Engine,
     ExhaustionPolicy,
     Lexeme,
     NoCandidateBigramError,
     SelectionMethod,
     Splitter,
+    StopwordPolicy,
 )
 
 
@@ -46,6 +48,7 @@ def test_winner_shape():
     assert winner.n_lexemes == 2
     assert isinstance(winner.score, float)
     assert winner.merge_token_count == 1
+    assert winner.merge_segment_range == 1
 
 
 @pytest.mark.fast
@@ -73,11 +76,19 @@ def test_winnerinfo_redundant_location_helpers_removed():
 
 @pytest.mark.fast
 def test_root_exports_include_types():
-    from remerge import Bigram, Lexeme as RootLexeme, WinnerInfo as RootWinnerInfo
+    from remerge import (
+        Bigram,
+        ConsensusRunSpec as RootConsensusRunSpec,
+        Lexeme as RootLexeme,
+        SearchStrategy as RootSearchStrategy,
+        WinnerInfo as RootWinnerInfo,
+    )
 
     assert RootLexeme is Lexeme
     assert RootWinnerInfo is not None
     assert Bigram is not None
+    assert RootConsensusRunSpec is not None
+    assert RootSearchStrategy is not None
 
 
 @pytest.mark.fast
@@ -118,8 +129,14 @@ def test_consecutive_remainder():
     [
         (SelectionMethod.log_likelihood, 0),
         (SelectionMethod.npmi, 0),
+        (SelectionMethod.logdice, 0),
+        (SelectionMethod.t_score, 0),
+        (SelectionMethod.delta_p, 0),
         (SelectionMethod.frequency, 0),
         ("frequency", 0),
+        ("logdice", 0),
+        ("t_score", 0),
+        ("delta_p", 0),
     ],
 )
 def test_methods(method, min_count):
@@ -135,6 +152,9 @@ def test_methods(method, min_count):
         ("frequency", 0),
         ("log_likelihood", 0),
         ("npmi", 0),
+        ("logdice", 0),
+        ("t_score", 0),
+        ("delta_p", 0),
     ],
 )
 def test_run_progress_parity(method, min_count, capsys):
@@ -248,7 +268,9 @@ def test_frequency_respects_min_count():
 
 
 @pytest.mark.fast
-@pytest.mark.parametrize("method", ["frequency", "log_likelihood", "npmi"])
+@pytest.mark.parametrize(
+    "method", ["frequency", "log_likelihood", "npmi", "logdice", "t_score", "delta_p"]
+)
 def test_deterministic_tie_breaking_is_order_independent(method):
     corpus_a = ["a b", "c d"]
     corpus_b = ["c d", "a b"]
@@ -528,6 +550,330 @@ def test_progress_validation_for_run_and_annotate():
 
     with pytest.raises(TypeError):
         annotate(["a b a b"], 1, progress=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.fast
+def test_stopword_policy_blocks_stopword_stopword_candidate():
+    corpus = ["of the of the of the in spite in spite"]
+    baseline = run(
+        corpus,
+        1,
+        method="frequency",
+        block_punct_only=False,
+    )
+    assert baseline[0].merged_lexeme.word == ("of", "the")
+
+    filtered = run(
+        corpus,
+        1,
+        method="frequency",
+        stopwords=["of", "the"],
+        stopword_policy=StopwordPolicy.block_stopword_stopword,
+        block_punct_only=False,
+    )
+    assert filtered[0].merged_lexeme.word != ("of", "the")
+
+
+@pytest.mark.fast
+def test_stopword_policy_mild_allows_stopword_content_pair():
+    corpus = ["in spite in spite in spite"]
+    winners = run(
+        corpus,
+        1,
+        method="frequency",
+        stopwords=["in"],
+        stopword_policy="block_stopword_stopword",
+        block_punct_only=False,
+    )
+    assert winners[0].merged_lexeme.word == ("in", "spite")
+
+
+@pytest.mark.fast
+def test_stopword_policy_any_blocks_stopword_content_pair():
+    corpus = ["in spite in spite in spite"]
+    winners = run(
+        corpus,
+        1,
+        method="frequency",
+        stopwords=["in"],
+        stopword_policy="block_any_stopword",
+        block_punct_only=False,
+    )
+    assert winners == []
+
+
+@pytest.mark.fast
+def test_block_punct_only_filters_punctuation_bigrams():
+    corpus = [", but , but , but hello world hello world"]
+    baseline = run(corpus, 1, method="frequency", block_punct_only=False)
+    assert baseline[0].merged_lexeme.word == (",", "but")
+
+    filtered = run(corpus, 1, method="frequency", block_punct_only=True)
+    assert filtered[0].merged_lexeme.word == ("hello", "world")
+
+
+@pytest.mark.fast
+def test_stopword_and_block_punct_validation_for_run_and_annotate():
+    with pytest.raises(ValueError):
+        run(["a b"], 1, stopword_policy="bad-policy")
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, stopword_policy="bad-policy")
+
+    with pytest.raises(TypeError):
+        run(["a b"], 1, stopwords="a")  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError):
+        annotate(["a b"], 1, stopwords="a")  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError):
+        run(["a b"], 1, block_punct_only=1)  # type: ignore[arg-type]
+
+    with pytest.raises(TypeError):
+        annotate(["a b"], 1, block_punct_only=1)  # type: ignore[arg-type]
+
+
+@pytest.mark.fast
+def test_range_validation_for_run_and_annotate():
+    with pytest.raises(ValueError):
+        run(["a b"], 1, min_range=0)
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, min_range=0)
+
+    with pytest.raises(ValueError):
+        run(["a b"], 1, range_alpha=-0.1)
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, range_alpha=-0.1)
+
+    with pytest.raises(ValueError):
+        run(["a b"], 1, range_alpha=float("nan"))
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, range_alpha=float("nan"))
+
+
+@pytest.mark.fast
+def test_probability_and_beam_validation_for_run_and_annotate():
+    with pytest.raises(ValueError):
+        run(["a b"], 1, min_p_ab=-0.1)
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, min_p_ba=1.1)
+
+    with pytest.raises(ValueError):
+        run(["a b"], 1, min_p_ab=float("nan"))
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, min_p_ba=float("nan"))
+
+    with pytest.raises(ValueError):
+        run(["a b"], 1, min_merge_count=0)
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, min_merge_count=0)
+
+    with pytest.raises(ValueError):
+        run(["a b"], 1, beam_width=0)
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, beam_top_m=0)
+
+    with pytest.raises(ValueError):
+        run(["a b"], 1, search_strategy="invalid")
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, search_strategy="invalid")
+
+
+@pytest.mark.fast
+def test_output_filter_validation_for_run_and_annotate():
+    with pytest.raises(ValueError):
+        run(["a b"], 1, min_winner_score_output=float("nan"))
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, min_winner_score_output=float("nan"))
+
+    with pytest.raises(ValueError):
+        run(["a b"], 1, min_winner_range_output=0)
+
+    with pytest.raises(ValueError):
+        annotate(["a b"], 1, min_winner_range_output=0)
+
+
+@pytest.mark.fast
+def test_probability_gates_filter_candidates():
+    corpus = ["a b a c a d"]
+    baseline = run(corpus, 1, method="frequency")
+    assert baseline
+
+    filtered = run(
+        corpus,
+        1,
+        method="frequency",
+        min_p_ab=0.9,
+        min_p_ba=0.9,
+    )
+    assert filtered == []
+
+
+@pytest.mark.fast
+def test_min_merge_count_selection_gate():
+    corpus = ["a b a b a b"]
+    baseline = run(corpus, 1, method="frequency")
+    assert baseline[0].merge_token_count == 3
+
+    filtered = run(corpus, 1, method="frequency", min_merge_count=4)
+    assert filtered == []
+
+
+@pytest.mark.fast
+def test_min_range_filters_single_segment_candidates():
+    corpus = ["x y x y x y", "a b", "a b"]
+    baseline = run(corpus, 1, method="frequency", line_delimiter=None)
+    assert baseline[0].merged_lexeme.word == ("x", "y")
+
+    filtered = run(corpus, 1, method="frequency", line_delimiter=None, min_range=2)
+    assert filtered[0].merged_lexeme.word == ("a", "b")
+
+
+@pytest.mark.fast
+def test_range_alpha_prefers_more_dispersed_candidate():
+    concentrated = " ".join(["x", "y"] * 20)
+    dispersed_docs = ["a b"] * 10
+    corpus = [concentrated, *dispersed_docs]
+
+    baseline = run(corpus, 1, method="frequency", line_delimiter=None)
+    assert baseline[0].merged_lexeme.word == ("x", "y")
+
+    dispersed = run(
+        corpus,
+        1,
+        method="frequency",
+        line_delimiter=None,
+        range_alpha=1.0,
+    )
+    assert dispersed[0].merged_lexeme.word == ("a", "b")
+
+
+@pytest.mark.fast
+def test_output_filters_apply_to_run_metadata():
+    winners = run(
+        ["a b a b", "c d"],
+        1,
+        method="frequency",
+        line_delimiter=None,
+        min_winner_range_output=2,
+    )
+    assert winners == []
+
+    winners = run(["a b a b"], 1, method="frequency", min_winner_score_output=10.0)
+    assert winners == []
+
+
+@pytest.mark.fast
+def test_output_filters_apply_to_annotate_metadata_only():
+    winners, annotated, labels = annotate(
+        ["a b a b"],
+        1,
+        method="frequency",
+        min_winner_score_output=10.0,
+    )
+    assert winners == []
+    assert annotated == ["<mwe:a_b> <mwe:a_b>"]
+    assert labels == []
+
+
+@pytest.mark.fast
+def test_beam_width_one_matches_greedy():
+    corpus = ["a b a b c d c d a b"]
+    greedy = run(corpus, 3, method="frequency", search_strategy="greedy")
+    beam_width_one = run(
+        corpus,
+        3,
+        method="frequency",
+        search_strategy="beam",
+        beam_width=1,
+        beam_top_m=4,
+    )
+    assert beam_width_one == greedy
+
+
+@pytest.mark.fast
+def test_consensus_run_accepts_dataclass_and_dict_specs():
+    corpus = ["a b a b c d c d"]
+    winners = run(
+        corpus,
+        1,
+        method="frequency",
+        consensus_runs=[
+            ConsensusRunSpec(method="frequency"),
+            {"method": "npmi"},
+        ],
+        consensus_min_run_support=1,
+        consensus_min_method_support=1,
+    )
+    assert winners
+    assert winners[0].merged_lexeme.word == ("a", "b")
+
+
+@pytest.mark.fast
+def test_consensus_support_thresholds_filter_output():
+    corpus = ["a b a b c d c d"]
+    winners = run(
+        corpus,
+        1,
+        method="frequency",
+        consensus_runs=[
+            {"method": "frequency"},
+            {"method": "npmi"},
+        ],
+        consensus_min_run_support=3,
+        consensus_min_method_support=1,
+    )
+    assert winners == []
+
+
+@pytest.mark.fast
+def test_consensus_annotate_uses_lexicon_rematch():
+    corpus = ["a b a b"]
+    winners, annotated, labels = annotate(
+        corpus,
+        1,
+        method="frequency",
+        consensus_runs=[
+            {"method": "frequency"},
+            {"method": "npmi"},
+        ],
+        consensus_min_run_support=1,
+        consensus_min_method_support=1,
+    )
+    assert winners
+    assert annotated == ["<mwe:a_b> <mwe:a_b>"]
+    assert labels == ["<mwe:a_b>"]
+
+
+@pytest.mark.fast
+def test_consensus_validation():
+    with pytest.raises(ValueError):
+        run(["a b"], 1, consensus_runs=[], consensus_min_run_support=1)
+
+    with pytest.raises(ValueError):
+        annotate(
+            ["a b"],
+            1,
+            consensus_runs=[{"method": "frequency"}],
+            consensus_min_run_support=0,
+        )
+
+    with pytest.raises(ValueError):
+        run(
+            ["a b"],
+            1,
+            consensus_runs=[{"method": "frequency"}],
+            consensus_min_method_support=0,
+        )
 
 
 @pytest.mark.fast

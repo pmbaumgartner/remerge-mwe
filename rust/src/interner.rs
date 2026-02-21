@@ -14,7 +14,7 @@ pub(crate) fn validate_token_vocabulary_size(vocab_size: usize) -> PyResult<()> 
     Ok(())
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Interner {
     str_to_id: FxHashMap<String, TokenId>,
     id_to_str: Vec<String>,
@@ -91,6 +91,14 @@ impl Interner {
             .str_to_id
             .get(value)
             .expect("token missing in interner while converting corpus")
+    }
+
+    pub(crate) fn maybe_id_for(&self, value: &str) -> Option<TokenId> {
+        self.str_to_id.get(value).copied()
+    }
+
+    pub(crate) fn token(&self, id: TokenId) -> &str {
+        &self.id_to_str[id as usize]
     }
 
     pub(crate) fn ids_to_strings(&self, ids: &[TokenId]) -> Vec<String> {

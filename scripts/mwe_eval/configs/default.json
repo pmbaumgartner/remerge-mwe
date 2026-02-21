@@ -1,0 +1,32 @@
+{
+  "dataset": "streusle",
+  "split": "dev",
+  "iterations": 50,
+  "method": "log_likelihood",
+  "min_count": 0,
+  "min_score": null,
+  "rescore_interval": 25,
+  "min_range": 1,
+  "range_alpha": 0.0,
+  "min_p_ab": null,
+  "min_p_ba": null,
+  "min_merge_count": 1,
+  "min_winner_score_output": null,
+  "min_winner_range_output": 1,
+  "search_strategy": "greedy",
+  "beam_width": 1,
+  "beam_top_m": 8,
+  "consensus_runs": null,
+  "consensus_min_run_support": 2,
+  "consensus_min_method_support": 1,
+  "decode_policy": "all",
+  "suppress_subspan_types": false,
+  "stopword_policy": "block_stopword_stopword",
+  "stopwords": null,
+  "block_punct_only": false,
+  "prediction_stopword_policy": "block_stopword_stopword",
+  "prediction_block_punct_only": false,
+  "parseme_langs": [
+    "EN"
+  ]
+}

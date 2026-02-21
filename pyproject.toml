@@ -19,6 +19,11 @@ dev = [
     "pytest-cov>=4.0.0",
     "hypothesis>=6",
 ]
+eval = [
+    "datasets>=2.19.0",
+    "conllu>=4.5.3",
+    "tqdm>=4.66.0",
+]
 
 [tool.maturin]
 python-source = "src"

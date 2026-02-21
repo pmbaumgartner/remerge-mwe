@@ -40,7 +40,67 @@ fn coerce_score(score: f64) -> f64 {
     }
 }
 
-pub(crate) fn score_ll_npmi(
+fn score_log_likelihood(bigram_freq: f64, left_freq: f64, right_freq: f64, total: f64) -> f64 {
+    let obs_a = bigram_freq;
+    let obs_b = left_freq - obs_a;
+    let obs_c = right_freq - obs_a;
+    let mut obs_d = total - obs_a - obs_b - obs_c;
+    if obs_d < 0.0 {
+        obs_d = 0.0;
+    }
+
+    let exp_a = ((obs_a + obs_b) * (obs_a + obs_c)) / total;
+    let exp_b = ((obs_a + obs_b) * (obs_b + obs_d)) / total;
+    let exp_c = ((obs_c + obs_d) * (obs_a + obs_c)) / total;
+    let exp_d = ((obs_c + obs_d) * (obs_b + obs_d)) / total;
+
+    let ll_a = safe_ll_term(obs_a, exp_a);
+    let ll_b = safe_ll_term(obs_b, exp_b);
+    let ll_c = safe_ll_term(obs_c, exp_c);
+    let ll_d = safe_ll_term(obs_d, exp_d);
+    let ll = 2.0 * (ll_a + ll_b + ll_c + ll_d);
+    coerce_score(if obs_a > exp_a { ll } else { -ll })
+}
+
+fn score_npmi(bigram_freq: f64, left_freq: f64, right_freq: f64, total: f64) -> f64 {
+    let prob_ab = bigram_freq / total;
+    let prob_a = left_freq / total;
+    let prob_b = right_freq / total;
+    let numerator = (prob_ab / (prob_a * prob_b)).ln();
+    let denominator = -(prob_ab.ln());
+    let npmi = if denominator > 0.0 {
+        numerator / denominator
+    } else {
+        f64::NAN
+    };
+    let perfect_association =
+        is_close_default(denominator, 0.0) && is_close_default(numerator, 0.0);
+    coerce_score(if perfect_association { 1.0 } else { npmi })
+}
+
+fn score_logdice(bigram_freq: f64, left_freq: f64, right_freq: f64) -> f64 {
+    let denom = (left_freq + right_freq).max(SMALL);
+    coerce_score(14.0 + ((2.0 * bigram_freq) / denom).log2())
+}
+
+fn score_t_score(bigram_freq: f64, left_freq: f64, right_freq: f64, total: f64) -> f64 {
+    let expected = (left_freq * right_freq) / total.max(SMALL);
+    coerce_score((bigram_freq - expected) / bigram_freq.max(SMALL).sqrt())
+}
+
+fn delta_p_directed(f_ab: f64, f_a: f64, f_b: f64, n: f64) -> f64 {
+    let p_b_given_a = f_ab / f_a.max(SMALL);
+    let p_b_given_not_a = (f_b - f_ab).max(0.0) / (n - f_a).max(SMALL);
+    p_b_given_a - p_b_given_not_a
+}
+
+fn score_delta_p_sym(bigram_freq: f64, left_freq: f64, right_freq: f64, total: f64) -> f64 {
+    let ab = delta_p_directed(bigram_freq, left_freq, right_freq, total);
+    let ba = delta_p_directed(bigram_freq, right_freq, left_freq, total);
+    coerce_score(0.5 * (ab + ba))
+}
+
+pub(crate) fn score_association(
     method: SelectionMethod,
     bigram_freq: i64,
     left_freq: i64,
@@ -52,45 +112,17 @@ pub(crate) fn score_ll_npmi(
     }
 
     let total = total_bigram_count as f64;
+    let f_ab = bigram_freq as f64;
+    let f_a = left_freq as f64;
+    let f_b = right_freq as f64;
 
     match method {
-        SelectionMethod::LogLikelihood => {
-            let obs_a = bigram_freq as f64;
-            let obs_b = left_freq as f64 - obs_a;
-            let obs_c = right_freq as f64 - obs_a;
-            let mut obs_d = total - obs_a - obs_b - obs_c;
-            if obs_d < 0.0 {
-                obs_d = 0.0;
-            }
-
-            let exp_a = ((obs_a + obs_b) * (obs_a + obs_c)) / total;
-            let exp_b = ((obs_a + obs_b) * (obs_b + obs_d)) / total;
-            let exp_c = ((obs_c + obs_d) * (obs_a + obs_c)) / total;
-            let exp_d = ((obs_c + obs_d) * (obs_b + obs_d)) / total;
-
-            let ll_a = safe_ll_term(obs_a, exp_a);
-            let ll_b = safe_ll_term(obs_b, exp_b);
-            let ll_c = safe_ll_term(obs_c, exp_c);
-            let ll_d = safe_ll_term(obs_d, exp_d);
-            let ll = 2.0 * (ll_a + ll_b + ll_c + ll_d);
-            coerce_score(if obs_a > exp_a { ll } else { -ll })
-        }
-        SelectionMethod::Npmi => {
-            let prob_ab = bigram_freq as f64 / total;
-            let prob_a = left_freq as f64 / total;
-            let prob_b = right_freq as f64 / total;
-            let numerator = (prob_ab / (prob_a * prob_b)).ln();
-            let denominator = -(prob_ab.ln());
-            let npmi = if denominator > 0.0 {
-                numerator / denominator
-            } else {
-                f64::NAN
-            };
-            let perfect_association =
-                is_close_default(denominator, 0.0) && is_close_default(numerator, 0.0);
-            coerce_score(if perfect_association { 1.0 } else { npmi })
-        }
-        SelectionMethod::Frequency => bigram_freq as f64,
+        SelectionMethod::Frequency => f_ab,
+        SelectionMethod::LogLikelihood => score_log_likelihood(f_ab, f_a, f_b, total),
+        SelectionMethod::Npmi => score_npmi(f_ab, f_a, f_b, total),
+        SelectionMethod::LogDice => score_logdice(f_ab, f_a, f_b),
+        SelectionMethod::TScore => score_t_score(f_ab, f_a, f_b, total),
+        SelectionMethod::DeltaP => score_delta_p_sym(f_ab, f_a, f_b, total),
     }
 }
 
@@ -108,16 +140,13 @@ fn score_stats(
         return (stats.bigram, None);
     }
 
-    let score = match method {
-        SelectionMethod::Frequency => freq as f64,
-        _ => score_ll_npmi(
-            method,
-            freq,
-            stats.left_freq,
-            stats.right_freq,
-            total_bigram_count,
-        ),
-    };
+    let score = score_association(
+        method,
+        freq,
+        stats.left_freq,
+        stats.right_freq,
+        total_bigram_count,
+    );
 
     if score == f64::NEG_INFINITY {
         (stats.bigram, None)

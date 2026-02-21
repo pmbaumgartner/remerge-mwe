@@ -4,7 +4,9 @@ use crate::lexeme_data::LexemeData;
 use crate::lexeme_store::{Lexeme, LexemeStore};
 use crate::py_bindings::{RunOutcome, StepResult};
 use crate::scoring::{compute_scores, scores_close, CandidateScore, CandidateStats};
-use crate::types::{LexemeId, Location, RunStatus, SelectionMethod, TokenId};
+use crate::types::{
+    LexemeId, Location, RunStatus, SearchStrategy, SelectionMethod, StopwordPolicy, TokenId,
+};
 use pyo3::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
@@ -28,6 +30,27 @@ pub(crate) enum StepStatus {
     Winner(StepData),
     NoCandidate,
     BelowMinScore(f64),
+}
+
+#[derive(Clone)]
+struct BeamState {
+    engine: Engine,
+    winners: Vec<StepResult>,
+    cumulative_score: f64,
+    insertion_order: usize,
+}
+
+pub(crate) fn apply_range_penalty(base_score: f64, range_factor: f64, range_alpha: f64) -> f64 {
+    if range_alpha <= 0.0 {
+        return base_score;
+    }
+
+    let multiplier = range_factor.powf(range_alpha).max(f64::MIN_POSITIVE);
+    if base_score >= 0.0 {
+        base_score * multiplier
+    } else {
+        base_score / multiplier
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -326,6 +349,7 @@ pub(crate) fn merge_winner(
 }
 
 #[pyclass]
+#[derive(Clone)]
 pub struct Engine {
     pub(crate) interner: Interner,
     pub(crate) lexeme_store: LexemeStore,
@@ -335,6 +359,17 @@ pub struct Engine {
     pub(crate) method: SelectionMethod,
     pub(crate) min_count: i64,
     pub(crate) rescore_interval: usize,
+    pub(crate) stopword_token_ids: FxHashSet<TokenId>,
+    pub(crate) stopword_policy: StopwordPolicy,
+    pub(crate) block_punct_only: bool,
+    pub(crate) min_range: usize,
+    pub(crate) range_alpha: f64,
+    pub(crate) min_p_ab: Option<f64>,
+    pub(crate) min_p_ba: Option<f64>,
+    pub(crate) min_merge_count: usize,
+    pub(crate) search_strategy: SearchStrategy,
+    pub(crate) beam_width: usize,
+    pub(crate) beam_top_m: usize,
     pub(crate) candidate_scores: FxHashMap<BigramId, CandidateScore>,
     pub(crate) candidate_heap: BinaryHeap<HeapEntry>,
     pub(crate) bigram_generation: FxHashMap<BigramId, u64>,
@@ -344,6 +379,132 @@ pub struct Engine {
 }
 
 impl Engine {
+    fn token_is_punct(token: &str) -> bool {
+        !token.is_empty() && token.chars().all(|ch| !ch.is_alphanumeric())
+    }
+
+    fn lexeme_is_stopword_unigram(&self, lexeme_id: LexemeId) -> bool {
+        let lexeme = self.lexeme_store.get(lexeme_id);
+        if lexeme.word.len() != 1 {
+            return false;
+        }
+        self.stopword_token_ids.contains(&lexeme.word[0])
+    }
+
+    fn lexeme_is_punct_only(&self, lexeme_id: LexemeId) -> bool {
+        let lexeme = self.lexeme_store.get(lexeme_id);
+        !lexeme.word.is_empty()
+            && lexeme
+                .word
+                .iter()
+                .all(|token_id| Self::token_is_punct(self.interner.token(*token_id)))
+    }
+
+    fn candidate_is_structurally_filtered(&self, bigram: BigramId) -> bool {
+        if self.block_punct_only
+            && (self.lexeme_is_punct_only(bigram.left) || self.lexeme_is_punct_only(bigram.right))
+        {
+            return true;
+        }
+
+        match self.stopword_policy {
+            StopwordPolicy::None => false,
+            StopwordPolicy::BlockStopwordStopword => {
+                self.lexeme_is_stopword_unigram(bigram.left)
+                    && self.lexeme_is_stopword_unigram(bigram.right)
+            }
+            StopwordPolicy::BlockAnyStopword => {
+                self.lexeme_is_stopword_unigram(bigram.left)
+                    || self.lexeme_is_stopword_unigram(bigram.right)
+            }
+        }
+    }
+
+    fn candidate_probabilities(&self, bigram: BigramId, freq: i64) -> Option<(f64, f64)> {
+        let left_freq = *self.bigrams.left_lex_freqs.get(&bigram.left)?;
+        let right_freq = *self.bigrams.right_lex_freqs.get(&bigram.right)?;
+        if left_freq <= 0 || right_freq <= 0 {
+            return None;
+        }
+        let p_b_given_a = freq as f64 / left_freq as f64;
+        let p_a_given_b = freq as f64 / right_freq as f64;
+        Some((p_b_given_a, p_a_given_b))
+    }
+
+    fn candidate_passes_probability_gates(&self, bigram: BigramId, freq: i64) -> bool {
+        if self.min_p_ab.is_none() && self.min_p_ba.is_none() {
+            return true;
+        }
+        let Some((p_ab, p_ba)) = self.candidate_probabilities(bigram, freq) else {
+            return false;
+        };
+        if let Some(threshold) = self.min_p_ab {
+            if p_ab < threshold {
+                return false;
+            }
+        }
+        if let Some(threshold) = self.min_p_ba {
+            if p_ba < threshold {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn bigram_merge_count(&self, bigram: BigramId) -> usize {
+        let merged_width = self.lexeme_store.get(bigram.left).word.len()
+            + self.lexeme_store.get(bigram.right).word.len();
+        let locations = self.bigrams.locations_for_bigram(bigram);
+        clean_bigram_locations(locations, merged_width).len()
+    }
+
+    fn candidate_passes_merge_count(&self, bigram: BigramId) -> bool {
+        if self.min_merge_count <= 1 {
+            return true;
+        }
+        self.bigram_merge_count(bigram) >= self.min_merge_count
+    }
+
+    fn candidate_is_selection_filtered(&self, bigram: BigramId, freq: i64) -> bool {
+        self.candidate_is_structurally_filtered(bigram)
+            || !self.candidate_passes_probability_gates(bigram, freq)
+            || !self.candidate_passes_merge_count(bigram)
+    }
+
+    fn range_enabled(&self) -> bool {
+        self.min_range > 1 || self.range_alpha > 0.0
+    }
+
+    fn segment_range_for_bigram(&self, bigram: BigramId) -> usize {
+        self.bigrams.segment_range_for_bigram(bigram)
+    }
+
+    fn range_factor_for_bigram(&self, range: usize) -> f64 {
+        let max_range = self.lexemes.corpus_length();
+        if max_range <= 1 || range == 0 {
+            return 1.0;
+        }
+        (1.0 + range as f64).ln() / (1.0 + max_range as f64).ln()
+    }
+
+    fn range_adjusted_score(&self, base_score: f64, range: usize) -> f64 {
+        let range_factor = self.range_factor_for_bigram(range);
+        apply_range_penalty(base_score, range_factor, self.range_alpha)
+    }
+
+    fn candidate_selection_score(&self, bigram: BigramId, base_score: f64) -> Option<f64> {
+        if !self.range_enabled() {
+            return Some(base_score);
+        }
+
+        let range = self.segment_range_for_bigram(bigram);
+        if self.min_range > 1 && range < self.min_range {
+            return None;
+        }
+
+        Some(self.range_adjusted_score(base_score, range))
+    }
+
     pub(crate) fn token_ids_to_strings(&self, token_ids: &[TokenId]) -> Vec<String> {
         self.interner.ids_to_strings(token_ids)
     }
@@ -386,10 +547,29 @@ impl Engine {
             SelectionMethod::Frequency => self
                 .bigrams
                 .bigrams_to_freqs
-                .values()
-                .filter(|freq| **freq >= self.min_count)
+                .iter()
+                .filter(|(bigram, freq)| {
+                    **freq >= self.min_count
+                        && !self.candidate_is_selection_filtered(**bigram, **freq)
+                        && self
+                            .candidate_selection_score(**bigram, **freq as f64)
+                            .is_some()
+                })
                 .count(),
-            SelectionMethod::LogLikelihood | SelectionMethod::Npmi => self.candidate_scores.len(),
+            SelectionMethod::LogLikelihood
+            | SelectionMethod::Npmi
+            | SelectionMethod::LogDice
+            | SelectionMethod::TScore
+            | SelectionMethod::DeltaP => self
+                .candidate_scores
+                .iter()
+                .filter(|(bigram, score)| {
+                    !self.candidate_is_selection_filtered(**bigram, score.frequency)
+                        && self
+                            .candidate_selection_score(**bigram, score.score)
+                            .is_some()
+                })
+                .count(),
         };
         if live_candidates == 0 {
             self.candidate_heap.clear();
@@ -413,27 +593,41 @@ impl Engine {
                     .bigrams_to_freqs
                     .iter()
                     .filter_map(|(bigram, freq)| {
-                        if *freq < self.min_count {
+                        if *freq < self.min_count
+                            || self.candidate_is_selection_filtered(*bigram, *freq)
+                        {
                             None
                         } else {
-                            Some((*bigram, *freq))
+                            self.candidate_selection_score(*bigram, *freq as f64)
+                                .map(|selection_score| (*bigram, *freq, selection_score))
                         }
                     })
                     .collect::<Vec<_>>();
 
-                for (bigram, freq) in entries {
-                    self.push_heap_entry(bigram, freq as f64, freq);
+                for (bigram, freq, selection_score) in entries {
+                    self.push_heap_entry(bigram, selection_score, freq);
                 }
             }
-            SelectionMethod::LogLikelihood | SelectionMethod::Npmi => {
+            SelectionMethod::LogLikelihood
+            | SelectionMethod::Npmi
+            | SelectionMethod::LogDice
+            | SelectionMethod::TScore
+            | SelectionMethod::DeltaP => {
                 let entries = self
                     .candidate_scores
                     .iter()
-                    .map(|(bigram, score)| (*bigram, *score))
+                    .filter_map(|(bigram, score)| {
+                        if self.candidate_is_selection_filtered(*bigram, score.frequency) {
+                            None
+                        } else {
+                            self.candidate_selection_score(*bigram, score.score)
+                                .map(|selection_score| (*bigram, score.frequency, selection_score))
+                        }
+                    })
                     .collect::<Vec<_>>();
 
-                for (bigram, score) in entries {
-                    self.push_heap_entry(bigram, score.score, score.frequency);
+                for (bigram, frequency, selection_score) in entries {
+                    self.push_heap_entry(bigram, selection_score, frequency);
                 }
             }
         }
@@ -449,15 +643,18 @@ impl Engine {
                     .bigrams_to_freqs
                     .iter()
                     .filter_map(|(bigram, freq)| {
-                        if *freq < self.min_count {
+                        if *freq < self.min_count
+                            || self.candidate_is_selection_filtered(*bigram, *freq)
+                        {
                             None
                         } else {
-                            Some((*bigram, *freq))
+                            self.candidate_selection_score(*bigram, *freq as f64)
+                                .map(|selection_score| (*bigram, *freq, selection_score))
                         }
                     })
                     .collect::<Vec<_>>();
-                for (bigram, freq) in entries {
-                    self.push_heap_entry(bigram, freq as f64, freq);
+                for (bigram, freq, selection_score) in entries {
+                    self.push_heap_entry(bigram, selection_score, freq);
                 }
                 self.dirty_bigrams.clear();
                 return;
@@ -469,11 +666,16 @@ impl Engine {
                     self.remove_candidate_generation(bigram);
                     continue;
                 };
-                if freq < self.min_count {
+                if freq < self.min_count || self.candidate_is_selection_filtered(bigram, freq) {
                     self.remove_candidate_generation(bigram);
                     continue;
                 }
-                self.push_heap_entry(bigram, freq as f64, freq);
+                let Some(selection_score) = self.candidate_selection_score(bigram, freq as f64)
+                else {
+                    self.remove_candidate_generation(bigram);
+                    continue;
+                };
+                self.push_heap_entry(bigram, selection_score, freq);
             }
             self.maybe_compact_candidate_heap();
             return;
@@ -511,8 +713,17 @@ impl Engine {
             self.bigram_generation.clear();
             for (bigram, maybe_score) in rescored {
                 if let Some(score) = maybe_score {
+                    if self.candidate_is_selection_filtered(bigram, score.frequency) {
+                        self.remove_candidate_generation(bigram);
+                        continue;
+                    }
+                    let Some(selection_score) = self.candidate_selection_score(bigram, score.score)
+                    else {
+                        self.remove_candidate_generation(bigram);
+                        continue;
+                    };
                     self.candidate_scores.insert(bigram, score);
-                    self.push_heap_entry(bigram, score.score, score.frequency);
+                    self.push_heap_entry(bigram, selection_score, score.frequency);
                 }
             }
 
@@ -554,8 +765,19 @@ impl Engine {
 
         for (bigram, maybe_score) in rescored {
             if let Some(score) = maybe_score {
+                if self.candidate_is_selection_filtered(bigram, score.frequency) {
+                    self.candidate_scores.remove(&bigram);
+                    self.remove_candidate_generation(bigram);
+                    continue;
+                }
+                let Some(selection_score) = self.candidate_selection_score(bigram, score.score)
+                else {
+                    self.candidate_scores.remove(&bigram);
+                    self.remove_candidate_generation(bigram);
+                    continue;
+                };
                 self.candidate_scores.insert(bigram, score);
-                self.push_heap_entry(bigram, score.score, score.frequency);
+                self.push_heap_entry(bigram, selection_score, score.frequency);
             } else {
                 self.candidate_scores.remove(&bigram);
                 self.remove_candidate_generation(bigram);
@@ -581,22 +803,43 @@ impl Engine {
                     else {
                         continue;
                     };
-                    if freq < self.min_count {
+                    if freq < self.min_count
+                        || self.candidate_is_selection_filtered(entry.bigram, freq)
+                    {
                         continue;
                     }
+                    let Some(selection_score) =
+                        self.candidate_selection_score(entry.bigram, freq as f64)
+                    else {
+                        continue;
+                    };
                     CandidateScore {
-                        score: freq as f64,
+                        score: selection_score,
                         frequency: freq,
                     }
                 }
-                SelectionMethod::LogLikelihood | SelectionMethod::Npmi => {
+                SelectionMethod::LogLikelihood
+                | SelectionMethod::Npmi
+                | SelectionMethod::LogDice
+                | SelectionMethod::TScore
+                | SelectionMethod::DeltaP => {
                     let Some(candidate) = self.candidate_scores.get(&entry.bigram).copied() else {
                         continue;
                     };
-                    if candidate.frequency < self.min_count {
+                    if candidate.frequency < self.min_count
+                        || self.candidate_is_selection_filtered(entry.bigram, candidate.frequency)
+                    {
                         continue;
                     }
-                    candidate
+                    let Some(selection_score) =
+                        self.candidate_selection_score(entry.bigram, candidate.score)
+                    else {
+                        continue;
+                    };
+                    CandidateScore {
+                        score: selection_score,
+                        frequency: candidate.frequency,
+                    }
                 }
             };
 
@@ -612,6 +855,13 @@ impl Engine {
 
     pub(crate) fn step_result(&self, step_data: StepData) -> StepResult {
         let merge_token_count = step_data.winner.bigram_locations.len();
+        let merge_segment_range = step_data
+            .winner
+            .bigram_locations
+            .iter()
+            .map(|(line_ix, _)| *line_ix)
+            .collect::<FxHashSet<_>>()
+            .len();
         let left = self.lexeme_store.get(step_data.winner.bigram.left);
         let right = self.lexeme_store.get(step_data.winner.bigram.right);
         let merged = self.lexeme_store.get(step_data.winner.merged_lexeme);
@@ -625,6 +875,7 @@ impl Engine {
             merged_word: self.token_ids_to_strings(&merged.word),
             merged_ix: merged.ix,
             merge_token_count,
+            merge_segment_range,
         }
     }
 
@@ -677,17 +928,22 @@ impl Engine {
         (annotated_documents, sorted_labels)
     }
 
-    pub(crate) fn step_internal(&mut self, min_score: Option<f64>) -> StepStatus {
-        self.refresh_candidate_state(false);
-
-        let Some((bigram, candidate)) = self.select_candidate() else {
-            return StepStatus::NoCandidate;
+    fn apply_selected_candidate(
+        &mut self,
+        bigram: BigramId,
+        candidate: CandidateScore,
+    ) -> Option<StepData> {
+        let freq = match self.method {
+            SelectionMethod::Frequency => self.bigrams.bigrams_to_freqs.get(&bigram).copied()?,
+            _ => self
+                .candidate_scores
+                .get(&bigram)
+                .copied()
+                .map(|score| score.frequency)?,
         };
 
-        if let Some(score_threshold) = min_score {
-            if candidate.score < score_threshold {
-                return StepStatus::BelowMinScore(candidate.score);
-            }
+        if freq < self.min_count || self.candidate_is_selection_filtered(bigram, freq) {
+            return None;
         }
 
         let merged_lexeme_ids = merged_lexeme_ids_for_bigram(bigram, &mut self.lexeme_store);
@@ -708,13 +964,166 @@ impl Engine {
         self.dirty_bigrams = touched;
         self.iteration_counter += 1;
 
-        StepStatus::Winner(StepData {
+        Some(StepData {
             score: candidate.score,
             winner,
         })
     }
 
+    fn top_candidates(
+        &self,
+        min_score: Option<f64>,
+        limit: usize,
+    ) -> (Vec<(BigramId, CandidateScore)>, Option<f64>) {
+        let mut probe = self.clone();
+        probe.refresh_candidate_state(false);
+
+        let mut out = Vec::new();
+        let mut best_below_min = None;
+        while out.len() < limit {
+            let Some((bigram, candidate)) = probe.select_candidate() else {
+                break;
+            };
+            if let Some(threshold) = min_score {
+                if candidate.score < threshold {
+                    best_below_min = Some(candidate.score);
+                    break;
+                }
+            }
+            out.push((bigram, candidate));
+        }
+        (out, best_below_min)
+    }
+
+    fn sort_beam_states(states: &mut [BeamState]) {
+        states.sort_by(|left, right| {
+            right
+                .cumulative_score
+                .total_cmp(&left.cumulative_score)
+                .then_with(|| right.winners.len().cmp(&left.winners.len()))
+                .then_with(|| left.insertion_order.cmp(&right.insertion_order))
+        });
+    }
+
+    fn run_beam_internal(&mut self, iterations: usize, min_score: Option<f64>) -> RunOutcome {
+        let corpus_length = self.lexemes.corpus_length();
+
+        let mut states = vec![BeamState {
+            engine: self.clone(),
+            winners: Vec::new(),
+            cumulative_score: 0.0,
+            insertion_order: 0,
+        }];
+        let mut insertion_counter = 1usize;
+
+        for _ in 0..iterations {
+            let mut next_states = Vec::new();
+            let mut best_below_min: Option<f64> = None;
+
+            for state in &states {
+                let (candidates, below_min) =
+                    state.engine.top_candidates(min_score, self.beam_top_m);
+                if let Some(score) = below_min {
+                    best_below_min = match best_below_min {
+                        Some(current) => Some(current.max(score)),
+                        None => Some(score),
+                    };
+                }
+                if candidates.is_empty() {
+                    continue;
+                }
+
+                for (bigram, candidate) in candidates {
+                    let mut branch_engine = state.engine.clone();
+                    let Some(step_data) = branch_engine.apply_selected_candidate(bigram, candidate)
+                    else {
+                        continue;
+                    };
+                    let step_result = branch_engine.step_result(step_data);
+                    let mut branch_winners = state.winners.clone();
+                    branch_winners.push(step_result);
+                    next_states.push(BeamState {
+                        engine: branch_engine,
+                        winners: branch_winners,
+                        cumulative_score: state.cumulative_score + candidate.score,
+                        insertion_order: insertion_counter,
+                    });
+                    insertion_counter = insertion_counter.saturating_add(1);
+                }
+            }
+
+            if next_states.is_empty() {
+                let mut terminal_states = states;
+                Self::sort_beam_states(&mut terminal_states);
+                let best = terminal_states.into_iter().next().unwrap_or(BeamState {
+                    engine: self.clone(),
+                    winners: Vec::new(),
+                    cumulative_score: 0.0,
+                    insertion_order: 0,
+                });
+                *self = best.engine;
+                if let Some(score) = best_below_min {
+                    return (
+                        RunStatus::BelowMinScore.code(),
+                        best.winners,
+                        Some(score),
+                        corpus_length,
+                    );
+                }
+                return (
+                    RunStatus::NoCandidate.code(),
+                    best.winners,
+                    None,
+                    corpus_length,
+                );
+            }
+
+            Self::sort_beam_states(&mut next_states);
+            if next_states.len() > self.beam_width {
+                next_states.truncate(self.beam_width);
+            }
+            states = next_states;
+        }
+
+        Self::sort_beam_states(&mut states);
+        let best = states.into_iter().next().unwrap_or(BeamState {
+            engine: self.clone(),
+            winners: Vec::new(),
+            cumulative_score: 0.0,
+            insertion_order: 0,
+        });
+        *self = best.engine;
+        (
+            RunStatus::Completed.code(),
+            best.winners,
+            None,
+            corpus_length,
+        )
+    }
+
+    pub(crate) fn step_internal(&mut self, min_score: Option<f64>) -> StepStatus {
+        self.refresh_candidate_state(false);
+
+        let Some((bigram, candidate)) = self.select_candidate() else {
+            return StepStatus::NoCandidate;
+        };
+
+        if let Some(score_threshold) = min_score {
+            if candidate.score < score_threshold {
+                return StepStatus::BelowMinScore(candidate.score);
+            }
+        }
+        let Some(step_data) = self.apply_selected_candidate(bigram, candidate) else {
+            return StepStatus::NoCandidate;
+        };
+        StepStatus::Winner(step_data)
+    }
+
     pub(crate) fn run_internal(&mut self, iterations: usize, min_score: Option<f64>) -> RunOutcome {
+        if self.search_strategy == SearchStrategy::Beam && self.beam_width > 1 {
+            return self.run_beam_internal(iterations, min_score);
+        }
+
         let mut winners = Vec::new();
         let corpus_length = self.lexemes.corpus_length();
 

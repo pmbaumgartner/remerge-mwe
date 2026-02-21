@@ -1,0 +1,32 @@
+{
+  "train": [
+    {
+      "id": "coam-train-1",
+      "tokens": ["make", "up", "story"],
+      "mwe_spans": [[0, 2]],
+      "mwe_labels": ["LVC"]
+    }
+  ],
+  "dev": [
+    {
+      "id": "coam-dev-1",
+      "words": ["turn", "off", "lights"],
+      "bio_tags": ["B-VID", "I-VID", "O"]
+    },
+    {
+      "id": "coam-dev-2",
+      "tokens": ["give", "up", "now"],
+      "mwes": [
+        {"token_indices": [0, 1], "label": "VID"}
+      ]
+    }
+  ],
+  "test": [
+    {
+      "id": "coam-test-1",
+      "text": "in spite we persist",
+      "mwe_spans": [[0, 2]],
+      "mwe_labels": ["PP"]
+    }
+  ]
+}

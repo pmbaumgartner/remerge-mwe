@@ -1,0 +1,80 @@
+{
+  "split": "dev",
+  "iterations": 50,
+  "min_count": 0,
+  "min_score": null,
+  "rescore_interval": 25,
+  "min_range": 1,
+  "range_alpha": 0.0,
+  "min_p_ab": null,
+  "min_p_ba": null,
+  "min_merge_count": 1,
+  "min_winner_score_output": null,
+  "min_winner_range_output": 1,
+  "search_strategy": "greedy",
+  "beam_width": 1,
+  "beam_top_m": 8,
+  "consensus_runs": null,
+  "consensus_min_run_support": 2,
+  "consensus_min_method_support": 1,
+  "decode_policy": "all",
+  "suppress_subspan_types": false,
+  "stopword_policy": "block_stopword_stopword",
+  "stopwords": null,
+  "block_punct_only": false,
+  "prediction_stopword_policy": "block_stopword_stopword",
+  "prediction_block_punct_only": false,
+  "runs": [
+    {
+      "dataset": "parseme12",
+      "parseme_langs": [
+        "EN"
+      ],
+      "method": "log_likelihood"
+    },
+    {
+      "dataset": "streusle",
+      "method": "log_likelihood"
+    },
+    {
+      "dataset": "streusle",
+      "method": "logdice"
+    },
+    {
+      "dataset": "streusle",
+      "method": "delta_p"
+    },
+    {
+      "dataset": "streusle",
+      "method": "log_likelihood",
+      "decode_policy": "longest_per_start"
+    },
+    {
+      "dataset": "streusle",
+      "method": "log_likelihood",
+      "decode_policy": "maximal_non_overlapping"
+    },
+    {
+      "dataset": "streusle",
+      "method": "log_likelihood",
+      "search_strategy": "beam",
+      "beam_width": 3,
+      "beam_top_m": 8
+    },
+    {
+      "dataset": "streusle",
+      "method": "log_likelihood",
+      "consensus_methods": [
+        "frequency",
+        "log_likelihood",
+        "npmi"
+      ],
+      "consensus_min_run_support": 2,
+      "consensus_min_method_support": 2
+    },
+    {
+      "dataset": "coam",
+      "method": "log_likelihood"
+    }
+  ]
+}

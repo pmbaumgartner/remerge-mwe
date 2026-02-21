@@ -1,0 +1,24 @@
+[
+  {
+    "sent_id": "streusle-s1",
+    "toks": [
+      {"word": "kick"},
+      {"word": "the"},
+      {"word": "bucket"}
+    ],
+    "smwes": {
+      "1": {
+        "toknums": [1, 2, 3],
+        "lexcat": "V.VID"
+      }
+    }
+  },
+  {
+    "sent_id": "streusle-s2",
+    "tokens": ["in", "spite", "of", "rain"],
+    "mwes": [
+      {"token_indices": [0, 1], "label": "PP"},
+      {"token_indices": [2], "label": "SINGLE"}
+    ]
+  }
+]

@@ -9,7 +9,7 @@ pub(crate) struct BigramId {
     pub(crate) right: LexemeId,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct BigramData {
     pub(crate) bigrams_to_freqs: FxHashMap<BigramId, i64>,
     pub(crate) total_bigram_count: i64,
@@ -127,6 +127,18 @@ impl BigramData {
                 .cloned()
                 .unwrap_or_default()
         }
+    }
+
+    pub(crate) fn segment_range_for_bigram(&self, bigram: BigramId) -> usize {
+        let Some(locations) = self.bigrams_to_locations.get(&bigram) else {
+            return 0;
+        };
+
+        let mut segments = FxHashSet::default();
+        for (line_ix, _) in locations {
+            segments.insert(*line_ix);
+        }
+        segments.len()
     }
 
     pub(crate) fn maybe_remove_bigram(&mut self, bigram: BigramId) {

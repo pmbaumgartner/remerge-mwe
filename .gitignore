@@ -160,7 +160,17 @@ cython_debug/
 #.idea/
 
 scripts/
+!scripts/
+scripts/*
+!scripts/__init__.py
+!scripts/mwe_eval/
+!scripts/mwe_eval/**
+scripts/mwe_eval/**/__pycache__/
+scripts/mwe_eval/**/*.py[cod]
 *.json
+!scripts/mwe_eval/configs/*.json
+!tests/eval_fixtures/*.json
+data/mwe_eval/
 .docs/
 repomix-output.xml
 repomix-output.md

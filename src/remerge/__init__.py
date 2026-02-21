@@ -3,11 +3,14 @@ from importlib.metadata import version
 from .core import (
     Bigram,
     annotate,
+    ConsensusRunSpec,
     ExhaustionPolicy,
     Lexeme,
     NoCandidateBigramError,
+    SearchStrategy,
     SelectionMethod,
     Splitter,
+    StopwordPolicy,
     WinnerInfo,
     run,
 )
@@ -20,8 +23,11 @@ __all__ = [
     "Bigram",
     "Lexeme",
     "WinnerInfo",
+    "ConsensusRunSpec",
     "SelectionMethod",
+    "SearchStrategy",
     "Splitter",
+    "StopwordPolicy",
     "ExhaustionPolicy",
     "NoCandidateBigramError",
 ]
