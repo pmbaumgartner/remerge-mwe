@@ -2,6 +2,30 @@
 name = "remerge-rs"
 version = "0.4.1"
 edition = "2021"
+description = "Native core for the remerge-mwe Python package"
+license = "MIT"
+repository = "https://github.com/pmbaumgartner/remerge-mwe"
+include = [
+    "/Cargo.lock",
+    "/Cargo.toml",
+    "/LICENSE",
+    "/README.md",
+    "/pyproject.toml",
+    "/rust/src/bigram_data.rs",
+    "/rust/src/engine.rs",
+    "/rust/src/interner.rs",
+    "/rust/src/lexeme_data.rs",
+    "/rust/src/lexeme_store.rs",
+    "/rust/src/lib.rs",
+    "/rust/src/pos/annotations.rs",
+    "/rust/src/pos/filter.rs",
+    "/rust/src/pos/mod.rs",
+    "/rust/src/py_bindings.rs",
+    "/rust/src/scoring.rs",
+    "/rust/src/types.rs",
+    "/src/remerge/*.py",
+    "/src/remerge/*.pyi",
+]
 
 [lib]
 name = "_core"
@@ -19,7 +43,7 @@ rayon = "1.10"
 rustc-hash = "2"
 sentencex = "0.1.13"
 smallvec = "1.13"
-sha2 = "0.10"
 
 [dev-dependencies]
 proptest = "1"
+sha2 = "0.10"

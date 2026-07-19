@@ -83,6 +83,11 @@ winners = remerge.run(corpus, 500, progress=True)
 annotations. This path does not load a tagger or retokenize text. Tags belong to
 token occurrences, so equal surface forms may have different tags.
 
+This release is deliberately **pretagged-only**: callers provide occurrence-
+aligned English 17-tag UPOS. The package contains no built-in tagger, model
+artifact, model loader, training runtime, neural runtime, automatic download,
+or network request. The ordinary `run()` and `annotate()` APIs remain unchanged.
+
 ```python
 import remerge
 

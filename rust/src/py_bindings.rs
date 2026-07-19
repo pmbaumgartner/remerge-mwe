@@ -4,7 +4,6 @@ use crate::interner::Interner;
 use crate::lexeme_data::LexemeData;
 use crate::lexeme_store::LexemeStore;
 use crate::pos::filter::PosEngine;
-use crate::pos::linear::LinearPosModel;
 use crate::types::{RunStatus, SelectionMethod, Splitter, DEFAULT_RESCORE_INTERVAL};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -189,7 +188,6 @@ impl Engine {
 fn _core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Engine>()?;
     module.add_class::<PosEngine>()?;
-    module.add_class::<LinearPosModel>()?;
     module.add_class::<StepResult>()?;
     module.add("STATUS_COMPLETED", RunStatus::Completed.code())?;
     module.add("STATUS_NO_CANDIDATE", RunStatus::NoCandidate.code())?;

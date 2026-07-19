@@ -1,0 +1,50 @@
+{
+  "fixture_sha256": "63d91f8a7316d36c2e8006102bafc36a19049d54b5bd3ecf432d7aeb2cd61427",
+  "generated_at_unix": 1784497382.094601,
+  "machine": {
+    "cpu_count": 8,
+    "machine": "arm64",
+    "platform": "macOS-14.5-arm64-arm-64bit",
+    "power_mode": "AC",
+    "processor": "arm",
+    "python": "3.12.0"
+  },
+  "measurement": {
+    "durations_seconds": [
+      0.02841291599906981,
+      0.026964667020365596,
+      0.02873837505467236,
+      0.029287208104506135,
+      0.02810129220597446,
+      0.028731750091537833,
+      0.028970166807994246,
+      0.028213875135406852,
+      0.028401540825143456,
+      0.028760500019416213,
+      0.02815066697075963,
+      0.02845766698010266,
+      0.029004542157053947,
+      0.03127708286046982,
+      0.030373916029930115
+    ],
+    "iqr_over_median": 0.0275189300731098,
+    "median_seconds": 0.028731750091537833,
+    "p95_seconds": 0.03127708286046982
+  },
+  "protocol": {
+    "measured_repetitions": 15,
+    "tokens": 100000,
+    "warmups": 3
+  },
+  "schema_version": 1,
+  "source_revision": "a26662fa5d7ede6f04cadc370ac55d5a9084e695",
+  "unfiltered_core_tokens_per_second": 3480470.2004369833,
+  "winner_signature": [
+    [
+      "bright",
+      "river"
+    ],
+    12500.0,
+    12500
+  ]
+}

@@ -165,6 +165,16 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             metavar="PATH",
             help="Frozen pre-POS unfiltered-core baseline evidence for the same fixture.",
         )
+        group.addoption(
+            "--pos-pretagged-evidence",
+            metavar="PATH",
+            help="Required JSON evidence destination for a pretagged release run.",
+        )
+        group.addoption(
+            "--pos-pretagged-core-baseline-evidence",
+            metavar="PATH",
+            help="Frozen pre-POS core baseline for the pretagged release fixture.",
+        )
     except ValueError as error:
         if "--pos-tagger" not in str(error):
             raise
@@ -174,6 +184,10 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "pos_benchmark: opt-in POS quality and performance acceptance harness",
+    )
+    config.addinivalue_line(
+        "markers",
+        "pos_pretagged_release: opt-in supplied-tag technical release gate",
     )
 
 
