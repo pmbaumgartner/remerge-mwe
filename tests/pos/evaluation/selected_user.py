@@ -29,7 +29,7 @@ class CandidateMetrics:
     recall: float
 
 
-def _occurrences(winners: list[remerge.TaggedWinnerInfo]) -> set[Occurrence]:
+def _occurrences(winners: list[remerge.WinnerWithOccurrences]) -> set[Occurrence]:
     return {
         (
             occurrence.document_index,

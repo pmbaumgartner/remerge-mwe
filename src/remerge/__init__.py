@@ -14,7 +14,7 @@ from .core import (
     Splitter,
     TaggedDocument,
     TaggedToken,
-    TaggedWinnerInfo,
+    WinnerWithOccurrences,
     WinnerInfo,
     run,
     run_tagged,
@@ -40,6 +40,6 @@ __all__ = [
     "PosPattern",
     "TaggedDocument",
     "TaggedToken",
-    "TaggedWinnerInfo",
+    "WinnerWithOccurrences",
     "MweOccurrence",
 ]

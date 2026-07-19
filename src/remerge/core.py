@@ -206,7 +206,7 @@ class MweOccurrence:
 
 
 @dataclass(frozen=True, slots=True)
-class TaggedWinnerInfo(WinnerInfo):
+class WinnerWithOccurrences(WinnerInfo):
     occurrences: tuple[MweOccurrence, ...]
 
 
@@ -243,7 +243,7 @@ def _collect_winners(step_results: list[StepResult]) -> list[WinnerInfo]:
     return [_winner_from_step_result(step_result) for step_result in step_results]
 
 
-def _tagged_winner_from_step_result(step_result: StepResult) -> TaggedWinnerInfo:
+def _winner_with_occurrences(step_result: StepResult) -> WinnerWithOccurrences:
     winner = _winner_from_step_result(step_result)
     occurrences = tuple(
         MweOccurrence(*coordinate)
@@ -255,7 +255,7 @@ def _tagged_winner_from_step_result(step_result: StepResult) -> TaggedWinnerInfo
             strict=True,
         )
     )
-    return TaggedWinnerInfo(
+    return WinnerWithOccurrences(
         bigram=winner.bigram,
         merged_lexeme=winner.merged_lexeme,
         score=winner.score,
@@ -264,12 +264,10 @@ def _tagged_winner_from_step_result(step_result: StepResult) -> TaggedWinnerInfo
     )
 
 
-def _collect_tagged_winners(
+def _collect_winners_with_occurrences(
     step_results: list[StepResult],
-) -> list[TaggedWinnerInfo]:
-    return [
-        _tagged_winner_from_step_result(step_result) for step_result in step_results
-    ]
+) -> list[WinnerWithOccurrences]:
+    return [_winner_with_occurrences(step_result) for step_result in step_results]
 
 
 def _check_engine_status(
@@ -349,7 +347,9 @@ def _run_core(
     return engine, method, _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
 
 
-def _validate_progress_arg(progress: bool) -> None:
+def _validate_execution_args(iterations: int, progress: bool) -> None:
+    if iterations < 0:
+        raise ValueError("iterations must be greater than or equal to 0.")
     if not isinstance(progress, bool):
         raise TypeError("progress must be a bool.")
 
@@ -471,43 +471,85 @@ def _render_progress(completed: int, requested: int) -> None:
     sys.stderr.flush()
 
 
-def _run_with_optional_progress(
+def _execute(
     engine: Engine | PosEngine,
     *,
     iterations: int,
     min_score: float | None,
     progress: bool,
-) -> tuple[int, list[StepResult], float | None, int]:
+    on_exhausted: ExhaustionPolicy,
+    method: SelectionMethod,
+    min_count: int,
+) -> list[StepResult]:
     if not progress:
-        return engine.run(iterations, min_score)
-
-    remaining = iterations
-    completed = 0
-    status = STATUS_COMPLETED
-    selected_score = None
-    all_steps = []
-    corpus_length = engine.corpus_length()
-
-    while remaining > 0:
-        batch_size = 1
-        status, step_results, selected_score, _corpus_length = engine.run(
-            batch_size,
-            min_score,
+        status, steps, selected_score, _corpus_length = engine.run(
+            iterations, min_score
         )
-        if step_results:
-            all_steps.extend(step_results)
-            completed += len(step_results)
-            _render_progress(completed, iterations)
-        remaining -= batch_size
+    else:
+        status = STATUS_COMPLETED
+        selected_score = None
+        steps = []
+        for _iteration in range(iterations):
+            status, batch, selected_score, _corpus_length = engine.run(1, min_score)
+            if batch:
+                steps.extend(batch)
+                _render_progress(len(steps), iterations)
+            if status != STATUS_COMPLETED:
+                break
+        if steps:
+            sys.stderr.write("\n")
 
-        if status != STATUS_COMPLETED:
-            if completed > 0:
-                sys.stderr.write("\n")
-            return status, all_steps, selected_score, corpus_length
+    _check_engine_status(
+        status,
+        selected_score=selected_score,
+        min_score=min_score,
+        on_exhausted=on_exhausted,
+        method=method,
+        min_count=min_count,
+    )
+    return steps
 
-    if completed > 0:
-        sys.stderr.write("\n")
-    return status, all_steps, selected_score, corpus_length
+
+def _execute_and_annotate(
+    engine: Engine | PosEngine,
+    *,
+    iterations: int,
+    min_score: float | None,
+    progress: bool,
+    on_exhausted: ExhaustionPolicy,
+    method: SelectionMethod,
+    min_count: int,
+    mwe_prefix: str,
+    mwe_suffix: str,
+    token_separator: str,
+) -> tuple[list[StepResult], list[str], list[str]]:
+    if progress:
+        steps = _execute(
+            engine,
+            iterations=iterations,
+            min_score=min_score,
+            progress=True,
+            on_exhausted=on_exhausted,
+            method=method,
+            min_count=min_count,
+        )
+        _status, _steps, _score, _length, documents, labels = engine.run_and_annotate(
+            0, None, mwe_prefix, mwe_suffix, token_separator
+        )
+        return steps, documents, labels
+
+    status, steps, selected_score, _length, documents, labels = engine.run_and_annotate(
+        iterations, min_score, mwe_prefix, mwe_suffix, token_separator
+    )
+    _check_engine_status(
+        status,
+        selected_score=selected_score,
+        min_score=min_score,
+        on_exhausted=on_exhausted,
+        method=method,
+        min_count=min_count,
+    )
+    return steps, documents, labels
 
 
 def run(
@@ -532,10 +574,7 @@ def run(
     - ``merge_token_count``: number of non-overlapping merge applications for
       that winner in the current iteration.
     """
-    if iterations < 0:
-        raise ValueError("iterations must be greater than or equal to 0.")
-    _validate_progress_arg(progress)
-
+    _validate_execution_args(iterations, progress)
     engine, method, on_exhausted = _run_core(
         corpus,
         method=method,
@@ -547,16 +586,11 @@ def run(
         on_exhausted=on_exhausted,
     )
 
-    status, step_results, selected_score, _corpus_length = _run_with_optional_progress(
+    step_results = _execute(
         engine,
         iterations=iterations,
         min_score=min_score,
         progress=progress,
-    )
-    _check_engine_status(
-        status,
-        selected_score=selected_score,
-        min_score=min_score,
         on_exhausted=on_exhausted,
         method=method,
         min_count=min_count,
@@ -577,11 +611,9 @@ def run_with_occurrences(
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
     min_score: float | None = None,
     progress: bool = False,
-) -> list[TaggedWinnerInfo]:
+) -> list[WinnerWithOccurrences]:
     """Run unfiltered discovery with original-token occurrence coordinates."""
-    if iterations < 0:
-        raise ValueError("iterations must be greater than or equal to 0.")
-    _validate_progress_arg(progress)
+    _validate_execution_args(iterations, progress)
     engine, method, on_exhausted = _run_core(
         corpus,
         method=method,
@@ -592,21 +624,16 @@ def run_with_occurrences(
         rescore_interval=rescore_interval,
         on_exhausted=on_exhausted,
     )
-    status, step_results, selected_score, _corpus_length = _run_with_optional_progress(
+    step_results = _execute(
         engine,
         iterations=iterations,
         min_score=min_score,
         progress=progress,
-    )
-    _check_engine_status(
-        status,
-        selected_score=selected_score,
-        min_score=min_score,
         on_exhausted=on_exhausted,
         method=method,
         min_count=min_count,
     )
-    return _collect_tagged_winners(step_results)
+    return _collect_winners_with_occurrences(step_results)
 
 
 def annotate(
@@ -632,10 +659,7 @@ def annotate(
     Output text is whitespace-normalized because tokenization is done with
     Rust ``split_whitespace()`` and reconstructed with single-space joins.
     """
-    if iterations < 0:
-        raise ValueError("iterations must be greater than or equal to 0.")
-    _validate_progress_arg(progress)
-
+    _validate_execution_args(iterations, progress)
     engine, method, on_exhausted = _run_core(
         corpus,
         method=method,
@@ -647,58 +671,17 @@ def annotate(
         on_exhausted=on_exhausted,
     )
 
-    if not progress:
-        (
-            status,
-            step_results,
-            selected_score,
-            _corpus_length,
-            annotated_docs,
-            mwe_labels,
-        ) = engine.run_and_annotate(
-            iterations,
-            min_score,
-            mwe_prefix,
-            mwe_suffix,
-            token_separator,
-        )
-        _check_engine_status(
-            status,
-            selected_score=selected_score,
-            min_score=min_score,
-            on_exhausted=on_exhausted,
-            method=method,
-            min_count=min_count,
-        )
-        return _collect_winners(step_results), annotated_docs, mwe_labels
-
-    status, step_results, selected_score, _corpus_length = _run_with_optional_progress(
+    step_results, annotated_docs, mwe_labels = _execute_and_annotate(
         engine,
         iterations=iterations,
         min_score=min_score,
         progress=progress,
-    )
-    _check_engine_status(
-        status,
-        selected_score=selected_score,
-        min_score=min_score,
         on_exhausted=on_exhausted,
         method=method,
         min_count=min_count,
-    )
-    (
-        _status,
-        _unused_step_results,
-        _unused_selected_score,
-        _unused_corpus_length,
-        annotated_docs,
-        mwe_labels,
-    ) = engine.run_and_annotate(
-        0,
-        None,
-        mwe_prefix,
-        mwe_suffix,
-        token_separator,
+        mwe_prefix=mwe_prefix,
+        mwe_suffix=mwe_suffix,
+        token_separator=token_separator,
     )
     return _collect_winners(step_results), annotated_docs, mwe_labels
 
@@ -713,28 +696,21 @@ def run_tagged(
     on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
     min_score: float | None = None,
     progress: bool = False,
-) -> list[TaggedWinnerInfo]:
+) -> list[WinnerWithOccurrences]:
     """Discover POS-constrained MWEs from occurrence-aligned supplied tags."""
-    if iterations < 0:
-        raise ValueError("iterations must be greater than or equal to 0.")
-    _validate_progress_arg(progress)
+    _validate_execution_args(iterations, progress)
     engine, method = _make_pos_engine(corpus, patterns, method, min_count)
     on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
-    status, step_results, selected_score, _corpus_length = _run_with_optional_progress(
+    step_results = _execute(
         engine,
         iterations=iterations,
         min_score=min_score,
         progress=progress,
-    )
-    _check_engine_status(
-        status,
-        selected_score=selected_score,
-        min_score=min_score,
         on_exhausted=on_exhausted,
         method=method,
         min_count=min_count,
     )
-    return _collect_tagged_winners(step_results)
+    return _collect_winners_with_occurrences(step_results)
 
 
 def annotate_tagged(
@@ -750,43 +726,21 @@ def annotate_tagged(
     mwe_prefix: str = "<mwe:",
     mwe_suffix: str = ">",
     token_separator: str = "_",
-) -> tuple[list[TaggedWinnerInfo], list[str], list[str]]:
+) -> tuple[list[WinnerWithOccurrences], list[str], list[str]]:
     """Discover and annotate POS-constrained MWEs from supplied tags."""
-    if iterations < 0:
-        raise ValueError("iterations must be greater than or equal to 0.")
-    _validate_progress_arg(progress)
+    _validate_execution_args(iterations, progress)
     engine, method = _make_pos_engine(corpus, patterns, method, min_count)
     on_exhausted = _coerce_enum(on_exhausted, ExhaustionPolicy, "on_exhausted")
-
-    if not progress:
-        status, steps, score, _length, documents, labels = engine.run_and_annotate(
-            iterations,
-            min_score,
-            mwe_prefix,
-            mwe_suffix,
-            token_separator,
-        )
-    else:
-        status, steps, score, _length = _run_with_optional_progress(
-            engine,
-            iterations=iterations,
-            min_score=min_score,
-            progress=True,
-        )
-        _status, _steps, _score, _length, documents, labels = engine.run_and_annotate(
-            0,
-            None,
-            mwe_prefix,
-            mwe_suffix,
-            token_separator,
-        )
-
-    _check_engine_status(
-        status,
-        selected_score=score,
+    steps, documents, labels = _execute_and_annotate(
+        engine,
+        iterations=iterations,
         min_score=min_score,
+        progress=progress,
         on_exhausted=on_exhausted,
         method=method,
         min_count=min_count,
+        mwe_prefix=mwe_prefix,
+        mwe_suffix=mwe_suffix,
+        token_separator=token_separator,
     )
-    return _collect_tagged_winners(steps), documents, labels
+    return _collect_winners_with_occurrences(steps), documents, labels

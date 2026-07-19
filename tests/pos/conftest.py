@@ -143,7 +143,7 @@ def exact_occurrences(winners: Sequence[Any]) -> set[CandidateOccurrence]:
         winner_occurrences = getattr(winner, "occurrences", None)
         if winner_occurrences is None:
             raise AssertionError(
-                "POS utility evaluation requires TaggedWinnerInfo.occurrences; "
+                "POS utility evaluation requires WinnerWithOccurrences.occurrences; "
                 "do not infer positions from annotation strings"
             )
         for occurrence in winner_occurrences:

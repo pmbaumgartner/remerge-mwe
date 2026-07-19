@@ -115,10 +115,11 @@ candidate counts, scores, merges, results, and annotations. Proper subspans may
 merge internally to discover longer patterns, but those support merges are not
 returned and do not consume requested iterations.
 
-Tagged winners include exact original-token coordinates in
-`winner.occurrences`. Each `MweOccurrence` records document, sentence,
-start-token, and exclusive end-token indexes, so evaluation code need not infer
-spans from rendered strings.
+Tagged discovery and `run_with_occurrences()` return `WinnerWithOccurrences`,
+which adds exact original-token coordinates in `winner.occurrences`. Each
+`MweOccurrence` records document, sentence, start-token, and exclusive
+end-token indexes, so evaluation code need not infer spans from rendered
+strings.
 
 Use `remerge.from_conllu(text)` for strict CoNLL-U interchange. It retains
 integer-ID word rows, skips multiword-token range and empty-node rows, preserves
@@ -126,8 +127,8 @@ punctuation and supplied sentence/document boundaries, and rejects malformed
 or non-NFC input rather than repairing alignment.
 
 Evaluation code can call `run_with_occurrences()` for the same unfiltered
-discovery behavior as `run()` plus structured original-token coordinates. The
-ordinary API continues to return the existing `WinnerInfo` shape.
+discovery behavior as `run()` plus those structured coordinates. The ordinary
+API continues to return the existing `WinnerInfo` shape.
 
 Forms must be non-empty NFC strings without Unicode whitespace, and UPOS values
 must be one of the 17 Universal POS tags. Supplied sentence boundaries are

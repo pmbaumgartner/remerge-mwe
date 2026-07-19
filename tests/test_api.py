@@ -35,10 +35,16 @@ def test_lexeme_and_winner_string_helpers():
 
 
 def test_root_exports_include_types():
-    from remerge import Bigram, Lexeme as RootLexeme, WinnerInfo as RootWinnerInfo
+    from remerge import (
+        Bigram,
+        Lexeme as RootLexeme,
+        WinnerInfo as RootWinnerInfo,
+        WinnerWithOccurrences,
+    )
 
     assert RootLexeme is Lexeme
     assert RootWinnerInfo is not None
+    assert WinnerWithOccurrences is not None
     assert Bigram is not None
 
 

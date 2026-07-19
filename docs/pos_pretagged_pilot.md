@@ -28,8 +28,9 @@ engine as the default path.
   and annotations. Surface-identical rejected occurrences remain untouched.
 - Viable proper-subspan support merges for longer MWEs. They are not emitted,
   annotated, or counted as requested iterations.
-- `TaggedWinnerInfo.occurrences` with canonical document, sentence, start, and
-  exclusive-end token coordinates for protected downstream evaluation.
+- `WinnerWithOccurrences.occurrences` with canonical document, sentence,
+  start, and exclusive-end token coordinates for protected downstream
+  evaluation.
 
 ## Pilot evidence
 
@@ -60,9 +61,9 @@ metadata, and variance rules.
   discovery.
 - The first public diagnostic draft reused the legacy winner converter. A
   mechanical return-path mistake made three legacy equality tests fail; one
-  correction restored `WinnerInfo` on the raw path and kept
-  `TaggedWinnerInfo` exclusive to tagged APIs. No accepted semantic design was
-  retried or weakened.
+  correction restored `WinnerInfo` on `run()`; the structured diagnostic was
+  later exposed explicitly as `run_with_occurrences()`. No accepted semantic
+  design was retried or weakened.
 - The downstream harness exposed that rendered strings are not an acceptable
   occurrence oracle. The pilot added structured coordinates instead of asking
   evaluation code to infer spans.

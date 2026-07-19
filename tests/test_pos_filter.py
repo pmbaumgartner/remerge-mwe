@@ -265,11 +265,40 @@ def test_unfiltered_diagnostic_reports_exact_occurrence_coordinates() -> None:
     assert [winner.text for winner in diagnostic] == [
         winner.text for winner in ordinary
     ]
+    assert isinstance(diagnostic[0], remerge.WinnerWithOccurrences)
     assert diagnostic[0].occurrences == (
         remerge.MweOccurrence(0, 0, 0, 2),
         remerge.MweOccurrence(0, 0, 2, 4),
         remerge.MweOccurrence(2, 0, 0, 2),
     )
+
+
+def test_tagged_run_and_annotation_share_occurrence_projection(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    corpus = [
+        document(
+            (token("bright", "ADJ"), token("light", "NOUN")),
+            (token("bright", "ADJ"), token("light", "NOUN")),
+        )
+    ]
+
+    winners = remerge.run_tagged(
+        corpus, 1, patterns=[("ADJ", "NOUN")], method="frequency"
+    )
+    annotated_winners, documents, labels = remerge.annotate_tagged(
+        corpus,
+        1,
+        patterns=[("ADJ", "NOUN")],
+        method="frequency",
+        progress=True,
+    )
+
+    assert annotated_winners == winners
+    assert isinstance(annotated_winners[0], remerge.WinnerWithOccurrences)
+    assert documents == ["<mwe:bright_light>\n<mwe:bright_light>"]
+    assert labels == ["<mwe:bright_light>"]
+    assert "1/1" in capsys.readouterr().err
 
 
 def test_filtered_and_unfiltered_ties_share_lexical_ranking() -> None:
