@@ -580,6 +580,51 @@ def run(
     return _collect_winners(step_results)
 
 
+def run_with_occurrences(
+    corpus: list[str],
+    iterations: int,
+    *,
+    method: SelectionMethod | str = SelectionMethod.log_likelihood,
+    min_count: int = 0,
+    splitter: Splitter | str = Splitter.delimiter,
+    line_delimiter: str | None = "\n",
+    sentencex_language: str = "en",
+    rescore_interval: int = 25,
+    on_exhausted: ExhaustionPolicy | str = ExhaustionPolicy.stop,
+    min_score: float | None = None,
+    progress: bool = False,
+) -> list[TaggedWinnerInfo]:
+    """Run unfiltered discovery with original-token occurrence coordinates."""
+    if iterations < 0:
+        raise ValueError("iterations must be greater than or equal to 0.")
+    _validate_progress_arg(progress)
+    engine, method, on_exhausted = _run_core(
+        corpus,
+        method=method,
+        min_count=min_count,
+        splitter=splitter,
+        line_delimiter=line_delimiter,
+        sentencex_language=sentencex_language,
+        rescore_interval=rescore_interval,
+        on_exhausted=on_exhausted,
+    )
+    status, step_results, selected_score, _corpus_length = _run_with_optional_progress(
+        engine,
+        iterations=iterations,
+        min_score=min_score,
+        progress=progress,
+    )
+    _check_engine_status(
+        status,
+        selected_score=selected_score,
+        min_score=min_score,
+        on_exhausted=on_exhausted,
+        method=method,
+        min_count=min_count,
+    )
+    return _collect_tagged_winners(step_results)
+
+
 def annotate(
     corpus: list[str],
     iterations: int,

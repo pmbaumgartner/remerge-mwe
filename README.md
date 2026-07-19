@@ -120,6 +120,10 @@ integer-ID word rows, skips multiword-token range and empty-node rows, preserves
 punctuation and supplied sentence/document boundaries, and rejects malformed
 or non-NFC input rather than repairing alignment.
 
+Evaluation code can call `run_with_occurrences()` for the same unfiltered
+discovery behavior as `run()` plus structured original-token coordinates. The
+ordinary API continues to return the existing `WinnerInfo` shape.
+
 Forms must be non-empty NFC strings without Unicode whitespace, and UPOS values
 must be one of the 17 Universal POS tags. Supplied sentence boundaries are
 authoritative. Tagged annotation output joins tokens with spaces and sentences

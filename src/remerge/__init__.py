@@ -18,6 +18,7 @@ from .core import (
     WinnerInfo,
     run,
     run_tagged,
+    run_with_occurrences,
 )
 
 __version__ = version("remerge-mwe")
@@ -27,6 +28,7 @@ __all__ = [
     "annotate_tagged",
     "run",
     "run_tagged",
+    "run_with_occurrences",
     "Bigram",
     "Lexeme",
     "WinnerInfo",

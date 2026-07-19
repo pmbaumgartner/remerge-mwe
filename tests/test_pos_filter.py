@@ -249,3 +249,31 @@ def test_min_score_and_progress_use_emitted_winner_count(
     )
     assert len(winners) == 1
     assert "1/1" in capsys.readouterr().err
+
+
+def test_unfiltered_diagnostic_reports_exact_occurrence_coordinates() -> None:
+    corpus = ["a b a b\nc d", "", "a b"]
+
+    diagnostic = remerge.run_with_occurrences(
+        corpus,
+        1,
+        method="frequency",
+        splitter="delimiter",
+        line_delimiter="\n",
+    )
+    ordinary = remerge.run(
+        corpus,
+        1,
+        method="frequency",
+        splitter="delimiter",
+        line_delimiter="\n",
+    )
+
+    assert [winner.text for winner in diagnostic] == [
+        winner.text for winner in ordinary
+    ]
+    assert diagnostic[0].occurrences == (
+        remerge.MweOccurrence(0, 0, 0, 2),
+        remerge.MweOccurrence(0, 0, 2, 4),
+        remerge.MweOccurrence(2, 0, 0, 2),
+    )

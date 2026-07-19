@@ -615,6 +615,24 @@ impl Engine {
         let left = self.lexeme_store.get(step_data.winner.bigram.left);
         let right = self.lexeme_store.get(step_data.winner.bigram.right);
         let merged = self.lexeme_store.get(step_data.winner.merged_lexeme);
+        let coordinates = step_data
+            .winner
+            .bigram_locations
+            .iter()
+            .map(|(line, start)| {
+                let document = self
+                    .lexemes
+                    .doc_boundaries
+                    .partition_point(|boundary| *boundary <= *line)
+                    .saturating_sub(1);
+                (
+                    document,
+                    line - self.lexemes.doc_boundaries[document],
+                    *start,
+                    *start + merged.word.len(),
+                )
+            })
+            .collect::<Vec<_>>();
 
         StepResult {
             score: step_data.score,
@@ -625,10 +643,10 @@ impl Engine {
             merged_word: self.token_ids_to_strings(&merged.word),
             merged_ix: merged.ix,
             merge_token_count,
-            occurrence_documents: Vec::new(),
-            occurrence_sentences: Vec::new(),
-            occurrence_starts: Vec::new(),
-            occurrence_ends: Vec::new(),
+            occurrence_documents: coordinates.iter().map(|item| item.0).collect(),
+            occurrence_sentences: coordinates.iter().map(|item| item.1).collect(),
+            occurrence_starts: coordinates.iter().map(|item| item.2).collect(),
+            occurrence_ends: coordinates.iter().map(|item| item.3).collect(),
         }
     }
 
