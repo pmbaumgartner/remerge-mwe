@@ -2,7 +2,6 @@ use crate::scoring::{compare_candidate_rank, score_ll_npmi, CandidateRank};
 use crate::types::SelectionMethod;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(super) enum MatchKind {
@@ -31,7 +30,7 @@ impl CandidateKey {
     }
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(super) struct Occurrence {
     pub(super) sentence: usize,
     pub(super) start: usize,
@@ -90,7 +89,7 @@ impl PartialOrd for PosStableIdentity<'_> {
 
 #[derive(Default)]
 struct CandidateOccurrences {
-    raw: BTreeSet<Occurrence>,
+    raw: FxHashSet<Occurrence>,
     clean: Vec<Occurrence>,
 }
 
@@ -194,18 +193,20 @@ fn adjust_frequency(frequencies: &mut FxHashMap<Vec<String>, i64>, key: &[String
     }
 }
 
-fn clean_occurrences(raw: &BTreeSet<Occurrence>) -> Vec<Occurrence> {
-    let mut clean = Vec::with_capacity(raw.len());
+fn clean_occurrences(raw: &FxHashSet<Occurrence>) -> Vec<Occurrence> {
+    let mut ordered = raw.iter().cloned().collect::<Vec<_>>();
+    ordered.sort_unstable();
+    let mut clean = Vec::with_capacity(ordered.len());
     let mut previous_sentence = usize::MAX;
     let mut next_valid = 0;
-    for occurrence in raw {
+    for occurrence in ordered {
         if occurrence.sentence != previous_sentence {
             previous_sentence = occurrence.sentence;
             next_valid = 0;
         }
         if occurrence.start >= next_valid {
             next_valid = occurrence.end;
-            clean.push(occurrence.clone());
+            clean.push(occurrence);
         }
     }
     clean
