@@ -57,6 +57,8 @@ def run_trainer(tmp_path: Path, suffix: str) -> tuple[Path, Path, Path]:
         "32",
         "--seed",
         "7",
+        "--source-revision",
+        "test-revision",
     ]
     subprocess.run(command, check=True, cwd=ROOT)
     return output, report, template
@@ -74,6 +76,8 @@ def test_trainer_is_deterministic_and_emits_v1_header(tmp_path: Path) -> None:
     assert report["dev_accuracy_full_precision_all_labels"] >= 0.0
     assert report["dev_accuracy_quantized_all_labels"] >= 0.0
     assert report["dev_accuracy_quantized_candidate_pruned"] >= 0.0
+    assert report["feature_schema"]
+    assert report["quantization_scale"] > 0
 
 
 def test_reports_fast_path_and_template(tmp_path: Path) -> None:
@@ -85,6 +89,18 @@ def test_reports_fast_path_and_template(tmp_path: Path) -> None:
     assert report["quantization_loss_percentage_points"] <= 0.25
     assert report["candidate_pruning_loss_percentage_points"] <= 0.25
     assert template["artifact_sha256"] == report["artifact_sha256"]
+    assert set(template) >= {
+        "candidate_id",
+        "source_revision",
+        "trainer_command",
+        "seed",
+        "model_id",
+        "artifact_sha256",
+        "dev_report",
+        "final_evaluated",
+    }
+    assert template["source_revision"] == "test-revision"
+    assert template["final_evaluated"] is False
 
 
 def test_collision_policy_removes_colliding_form_hashes(
@@ -100,7 +116,7 @@ def test_collision_policy_removes_colliding_form_hashes(
         (module.Token("a", 0), module.Token("b", 1), module.Token("c", 2))
     )
     direct, candidates, collisions = module.lexicons((example,))
-    assert direct == {2: 2}
+    assert direct == {2: (2, 1)}
     assert candidates == {}
     assert collisions == 1
 
@@ -116,3 +132,60 @@ def test_final_argument_is_not_accepted(tmp_path: Path) -> None:
     )
     assert completed.returncode != 0
     assert "usage:" in completed.stderr
+
+
+def test_features_match_the_rust_binding_contract() -> None:
+    spec = importlib.util.spec_from_file_location("pos_linear_features", TRAINER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    assert module.features(("ÄBC", "Dog", "I"), 1) == (
+        "W=Dog",
+        "L=dog",
+        "S=Xxx",
+        "P1=d",
+        "P2=do",
+        "P3=dog",
+        "P4=dog",
+        "U1=g",
+        "U2=og",
+        "U3=dog",
+        "U4=dog",
+        "PL=Äbc",
+        "PS=XXX",
+        "NL=i",
+        "NS=X",
+        "PC=Äbc|dog",
+        "CN=dog|i",
+        "F=upper",
+        "F=title",
+    )
+
+
+def test_rust_golden_feature_vector() -> None:
+    spec = importlib.util.spec_from_file_location("pos_linear_golden", TRAINER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    assert module.features(("Hi", "FOO!", "é"), 1) == (
+        "W=FOO!",
+        "L=foo!",
+        "S=XXX!",
+        "P1=f",
+        "P2=fo",
+        "P3=foo",
+        "P4=foo!",
+        "U1=!",
+        "U2=o!",
+        "U3=oo!",
+        "U4=foo!",
+        "PL=hi",
+        "PS=Xx",
+        "NL=é",
+        "NS=x",
+        "PC=hi|foo!",
+        "CN=foo!|é",
+        "F=upper",
+    )

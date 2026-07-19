@@ -47,6 +47,25 @@ HEADER = struct.Struct("<8sHHIHHHHIII")
 FNV_OFFSET = 0xCBF29CE484222325
 FNV_PRIME = 0x100000001B3
 MASK64 = (1 << 64) - 1
+DIRECT_TARGET_ACCURACY = 0.99
+FEATURE_SCHEMA = (
+    "W={form}",
+    "L={ascii_lower(form)}",
+    "S={shape(form)}",
+    "P1..P4={ascii_lower(form)[:width]}",
+    "U1..U4={ascii_lower(form)[-width:]}",
+    "PL={ascii_lower(previous)}",
+    "PS={shape(previous)}",
+    "NL={ascii_lower(following)}",
+    "NS={shape(following)}",
+    "PC={ascii_lower(previous)}|{ascii_lower(form)}",
+    "CN={ascii_lower(form)}|{ascii_lower(following)}",
+    "F=upper|title|digit|hyphen|apostrophe when true",
+)
+PUNCTUATION = frozenset("!\"'(),-./:;?[]_{}\\«»‐‑‒–—―‘’‚‛“”„‟…")
+NUMBER_CONNECTORS = frozenset("+-−.,_/%‰eE")
+HYPHENS = frozenset("-‐‑‒–—−")
+APOSTROPHES = frozenset("'’")
 
 
 @dataclass(frozen=True)
@@ -89,6 +108,8 @@ def read_conllu(path: Path) -> tuple[Example, ...]:
             continue
         if not word_id.isdecimal() or int(word_id) < 1:
             raise ValueError(f"{path}:{number}: expected positive integer word ID")
+        if unicodedata.normalize("NFC", form) != form:
+            raise ValueError(f"{path}:{number}: FORM must be NFC-normalized")
         if upos not in TAG_INDEX:
             raise ValueError(f"{path}:{number}: unsupported UPOS {upos!r}")
         current.append(Token(form, TAG_INDEX[upos]))
@@ -100,16 +121,26 @@ def read_conllu(path: Path) -> tuple[Example, ...]:
 
 
 def shape(form: str) -> str:
-    if not form:
-        return "empty"
-    if all(unicodedata.category(char).startswith("P") for char in form):
-        return "punct"
-    if any(char.isdigit() for char in form) and all(
-        char.isdigit() or unicodedata.category(char).startswith("N") or char in ".,/:+-"
+    if form in {"<BOS>", "<EOS>"}:
+        return form
+    return "".join(
+        "X"
+        if char.isupper()
+        else "x"
+        if char.islower() or char.isalpha()
+        else "d"
+        if char.isnumeric()
+        else char
         for char in form
-    ):
+    )
+
+
+def lexical_class(form: str) -> str:
+    if all(is_punctuation(char) for char in form):
+        return "punct"
+    if is_number_like(form):
         return "number"
-    if all(unicodedata.category(char).startswith("S") for char in form):
+    if all(is_symbol(char) for char in form):
         return "symbol"
     if form.isupper():
         return "upper"
@@ -120,42 +151,84 @@ def shape(form: str) -> str:
     return "mixed"
 
 
+def is_punctuation(character: str) -> bool:
+    return character in PUNCTUATION
+
+
+def is_number_like(form: str) -> bool:
+    seen_digit = False
+    for character in form:
+        if character.isnumeric():
+            seen_digit = True
+        elif character not in NUMBER_CONNECTORS:
+            return False
+    return seen_digit
+
+
+def is_symbol(character: str) -> bool:
+    return (
+        not character.isspace()
+        and not character.isalnum()
+        and not is_punctuation(character)
+        and unicodedata.category(character) != "Cc"
+    )
+
+
 def forced_tag(form: str) -> int | None:
-    token_shape = shape(form)
-    if token_shape == "punct":
+    token_class = lexical_class(form)
+    if token_class == "punct":
         return TAG_INDEX["PUNCT"]
-    if token_shape == "number":
+    if token_class == "number":
         return TAG_INDEX["NUM"]
-    if token_shape == "symbol":
+    if token_class == "symbol":
         return TAG_INDEX["SYM"]
     return None
+
+
+def ascii_lower(value: str) -> str:
+    if value in {"<BOS>", "<EOS>"}:
+        return value
+    return value.translate(
+        str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+    )
+
+
+def is_title(form: str) -> bool:
+    alphabetic = [char for char in form if char.isalpha()]
+    return (
+        len(alphabetic) >= 2
+        and alphabetic[0].isupper()
+        and all(char.islower() for char in alphabetic[1:])
+    )
 
 
 def features(forms: tuple[str, ...], index: int) -> tuple[str, ...]:
     """The 22 fixed feature families; false flags consume no feature slot."""
     form = forms[index]
-    lower = form.lower()
+    lower = ascii_lower(form)
     previous = forms[index - 1] if index else "<BOS>"
     following = forms[index + 1] if index + 1 < len(forms) else "<EOS>"
-    result = [f"W={form}", f"L={lower}", f"S={lower[-3:]}"]
+    previous_ascii = ascii_lower(previous)
+    following_ascii = ascii_lower(following)
+    result = [f"W={form}", f"L={lower}", f"S={shape(form)}"]
     result.extend(f"P{width}={lower[:width]}" for width in range(1, 5))
     result.extend(f"U{width}={lower[-width:]}" for width in range(1, 5))
     result.extend(
         (
-            f"PL={previous.lower()}",
-            f"PS={previous.lower()[-3:]}",
-            f"NL={following.lower()}",
-            f"NS={following.lower()[-3:]}",
-            f"PC={shape(previous)}",
-            f"CN={shape(following)}",
+            f"PL={previous_ascii}",
+            f"PS={shape(previous)}",
+            f"NL={following_ascii}",
+            f"NS={shape(following)}",
+            f"PC={previous_ascii}|{lower}",
+            f"CN={lower}|{following_ascii}",
         )
     )
     flags = (
-        ("UPPER", form.isupper()),
-        ("TITLE", form.istitle()),
-        ("DIGIT", any(char.isdigit() for char in form)),
-        ("HYPHEN", "-" in form),
-        ("APOSTROPHE", "'" in form or "’" in form),
+        ("upper", any(char.isupper() for char in form)),
+        ("title", is_title(form)),
+        ("digit", any(char.isnumeric() for char in form)),
+        ("hyphen", any(char in HYPHENS for char in form)),
+        ("apostrophe", any(char in APOSTROPHES for char in form)),
     )
     result.extend(f"F={name}" for name, enabled in flags if enabled)
     assert len(result) <= FEATURE_LIMIT
@@ -257,7 +330,7 @@ def train(
 
 def lexicons(
     examples: tuple[Example, ...],
-) -> tuple[dict[int, int], dict[int, int], int]:
+) -> tuple[dict[int, tuple[int, int]], dict[int, int], int]:
     forms: dict[int, set[str]] = defaultdict(set)
     labels: dict[int, Counter[int]] = defaultdict(Counter)
     for example in examples:
@@ -266,7 +339,7 @@ def lexicons(
             forms[key].add(token.form)
             labels[key][token.tag] += 1
     collisions = {key for key, variants in forms.items() if len(variants) > 1}
-    direct: dict[int, int] = {}
+    direct: dict[int, tuple[int, int]] = {}
     candidates: dict[int, int] = {}
     for key, counts in labels.items():
         if key in collisions:
@@ -275,8 +348,46 @@ def lexicons(
         if mask & (mask - 1):
             candidates[key] = mask
         else:
-            direct[key] = next(iter(counts))
+            direct[key] = (next(iter(counts)), sum(counts.values()))
     return direct, candidates, len(collisions)
+
+
+def select_direct_lexicon(
+    train_direct: Mapping[int, tuple[int, int]],
+    dev_examples: tuple[Example, ...],
+) -> tuple[dict[int, int], int | None, float | None, float]:
+    """Pick the most-covering pure train lexicon threshold meeting the dev gate."""
+    thresholds = sorted({support for _, support in train_direct.values()})
+    best: tuple[dict[int, int], int, float, float] | None = None
+    dev_tokens = sum(len(example.tokens) for example in dev_examples)
+    for threshold in thresholds:
+        trial = {
+            key: tag
+            for key, (tag, support) in train_direct.items()
+            if support >= threshold
+        }
+        accepted = correct = 0
+        for example in dev_examples:
+            for token in example.tokens:
+                if forced_tag(token.form) is not None:
+                    continue
+                tag = trial.get(fnv1a(token.form))
+                if tag is not None:
+                    accepted += 1
+                    correct += tag == token.tag
+        if not accepted:
+            continue
+        accepted_accuracy = correct / accepted
+        coverage = accepted / dev_tokens
+        if accepted_accuracy >= DIRECT_TARGET_ACCURACY and (
+            best is None
+            or coverage > best[3]
+            or (coverage == best[3] and threshold < best[1])
+        ):
+            best = (trial, threshold, accepted_accuracy, coverage)
+    if best is None:
+        return {}, None, None, 0.0
+    return best
 
 
 def allowed_tags(mask: int) -> tuple[int, ...]:
@@ -332,10 +443,23 @@ def accuracy(predictions: list[int], examples: tuple[Example, ...]) -> float:
 
 def quantize(
     biases: list[float], weights: dict[tuple[int, int], float]
-) -> tuple[list[int], dict[tuple[int, int], int]]:
-    return [max(-32768, min(32767, round(value))) for value in biases], {
-        key: max(-128, min(127, round(value))) for key, value in weights.items()
-    }
+) -> tuple[list[int], dict[tuple[int, int], int], float]:
+    max_weight = max((abs(value) for value in weights.values()), default=0.0)
+    max_bias = max((abs(value) for value in biases), default=0.0)
+    limits = []
+    if max_weight:
+        limits.append(127.0 / max_weight)
+    if max_bias:
+        limits.append(32767.0 / max_bias)
+    scale = min(limits) if limits else 1.0
+    return (
+        [max(-32768, min(32767, round(value * scale))) for value in biases],
+        {
+            key: max(-128, min(127, round(value * scale)))
+            for key, value in weights.items()
+        },
+        scale,
+    )
 
 
 def compile_model(
@@ -382,13 +506,18 @@ def compile_model(
 
 
 def registration_template(
-    model_id: str, tokenizer_id: str, digest: str
-) -> dict[str, str]:
+    args: argparse.Namespace, digest: str
+) -> dict[str, str | int | bool]:
     return {
-        "model_id": model_id,
-        "tokenizer_id": tokenizer_id,
+        "candidate_id": args.candidate_id,
+        "source_revision": args.source_revision,
+        "trainer_command": " ".join(__import__("sys").argv),
+        "seed": args.seed,
+        "model_id": args.model_id,
         "artifact_sha256": digest,
-        "candidate_registration": "Replace candidate path/version after oracle approval; do not register final evaluation data.",
+        "dev_report": str(args.report),
+        "final_evaluated": False,
+        "tokenizer_id": args.tokenizer_id,
     }
 
 
@@ -406,6 +535,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--buckets", type=int, default=1 << 18)
+    parser.add_argument("--candidate-id", default="remerge-pos-linear-candidate")
+    parser.add_argument("--source-revision", required=True)
     parser.add_argument("--model-id", default="remerge-pos-linear-v1")
     parser.add_argument("--tokenizer-id", default="unicode-whitespace-v1")
     arguments = parser.parse_args()
@@ -422,9 +553,12 @@ def main() -> None:
     dev_examples = read_conllu(args.dev)
     model = train(train_examples, args.epochs, args.buckets, args.seed)
     biases, weights = model.averaged()
-    direct, candidates, collision_count = lexicons(train_examples)
+    train_direct, candidates, collision_count = lexicons(train_examples)
+    direct, direct_threshold, direct_accuracy, direct_coverage = select_direct_lexicon(
+        train_direct, dev_examples
+    )
     full, _, _ = predict(biases, weights, dev_examples, args.buckets)
-    quantized_biases, quantized_weights = quantize(biases, weights)
+    quantized_biases, quantized_weights, quantization_scale = quantize(biases, weights)
     quantized, _, _ = predict(
         quantized_biases, quantized_weights, dev_examples, args.buckets
     )
@@ -462,6 +596,8 @@ def main() -> None:
         "epochs": args.epochs,
         "bucket_count": args.buckets,
         "feature_limit": FEATURE_LIMIT,
+        "feature_schema": FEATURE_SCHEMA,
+        "feature_hash": "fnv1a-64",
         "tag_order": TAGS,
         "train_sha256": hashlib.sha256(args.train.read_bytes()).hexdigest(),
         "dev_sha256": hashlib.sha256(args.dev.read_bytes()).hexdigest(),
@@ -472,10 +608,13 @@ def main() -> None:
         "dev_accuracy_quantized_candidate_pruned": pruned_accuracy,
         "quantization_loss_percentage_points": quantization_loss * 100,
         "candidate_pruning_loss_percentage_points": pruning_loss * 100,
-        "direct_lexical_coverage": direct_total / token_count,
-        "direct_lexical_accuracy": (direct_correct / direct_total)
-        if direct_total
-        else None,
+        "quantization_scale": quantization_scale,
+        "direct_lexical_target_accuracy": DIRECT_TARGET_ACCURACY,
+        "direct_lexical_support_threshold": direct_threshold,
+        "direct_lexical_coverage": direct_coverage,
+        "direct_lexical_accuracy": direct_accuracy,
+        "direct_lexical_accepted_tokens": direct_total,
+        "direct_lexical_correct_tokens": direct_correct,
         "direct_entries": len(direct),
         "candidate_entries": len(candidates),
         "removed_hash_collisions": collision_count,
@@ -488,7 +627,7 @@ def main() -> None:
     args.registration_template.parent.mkdir(parents=True, exist_ok=True)
     args.registration_template.write_text(
         json.dumps(
-            registration_template(args.model_id, args.tokenizer_id, digest),
+            registration_template(args, digest),
             indent=2,
             sort_keys=True,
         )
