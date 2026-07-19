@@ -309,7 +309,11 @@ class AveragedPerceptron:
 
 
 def train(
-    examples: tuple[Example, ...], epochs: int, buckets: int, seed: int
+    examples: tuple[Example, ...],
+    epochs: int,
+    buckets: int,
+    seed: int,
+    candidates: Mapping[int, int],
 ) -> AveragedPerceptron:
     model = AveragedPerceptron(buckets)
     order = list(range(len(examples)))
@@ -324,7 +328,13 @@ def train(
                 if forced is not None:
                     continue
                 bucket_ids = feature_buckets(forms, index, buckets)
-                model.update(bucket_ids, token.tag, model.predict(bucket_ids))
+                mask = candidates.get(fnv1a(token.form))
+                allowed = allowed_tags(mask) if mask is not None else range(17)
+                model.update(
+                    bucket_ids,
+                    token.tag,
+                    model.predict(bucket_ids, allowed),
+                )
     return model
 
 
@@ -551,9 +561,15 @@ def main() -> None:
     args = parse_args()
     train_examples = read_conllu(args.train)
     dev_examples = read_conllu(args.dev)
-    model = train(train_examples, args.epochs, args.buckets, args.seed)
-    biases, weights = model.averaged()
     train_direct, candidates, collision_count = lexicons(train_examples)
+    model = train(
+        train_examples,
+        args.epochs,
+        args.buckets,
+        args.seed,
+        candidates,
+    )
+    biases, weights = model.averaged()
     direct, direct_threshold, direct_accuracy, direct_coverage = select_direct_lexicon(
         train_direct, dev_examples
     )
