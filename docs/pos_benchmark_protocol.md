@@ -3,13 +3,17 @@ kata: 0bhv
 created: 2026-07-19
 ---
 
-# POS benchmark and evaluation protocol
+# Retired generated-tagger benchmark protocol
 
-This is the executable protocol for the optional built-in English UPOS model.
-It implements the protected gates in
-[`pos_quality_contract.md`](pos_quality_contract.md), consumes the frozen
-manifest maintained by `wtp0`, and does not apply to the MIT-only
-pretagged-input fallback.
+This records the frozen protocol used to reject the linear English UPOS model.
+Its executable release harness was removed when v1 reshaped to supplied tags;
+it is not a current product or release command. The protected gates and frozen
+manifest remain historical evidence.
+
+A future generated-tagger attempt requires a new Kata outcome, a fresh
+candidate registration, and an explicitly authorized executable oracle before
+any protected-final evaluation. The isolated rejected trainer and loader live
+under `experiments/pos-linear/` and use development data only.
 
 ## Boundary and provenance
 
@@ -75,41 +79,13 @@ repository fixtures. Editing an acceptance threshold, split, digest, or
 manifest after observing final results requires the separate change authority
 recorded in `pos_quality_contract.md`.
 
-## Reproducible command
+## Executable status
 
-Build the extension in release mode, then run this command from the repository
-root. Supply only already-acquired offline source data; the command has no
-network path.
-
-```sh
-uv run --no-sync maturin develop --release
-REMERGE_POS_BENCHMARK=1 \
-REMERGE_POS_BENCHMARK_POWER_MODE="AC power, low-power mode off" \
-OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 \
-VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
-uv run --no-sync pytest -q -m pos_benchmark tests/performance/test_pos_tagger.py \
-  --pos-tagger your_adapter_module:create_tagger \
-  --pos-benchmark-manifest tests/pos/evaluation/manifest.json \
-  --pos-benchmark-acquisition-root /absolute/path/to/acquired-pos-data \
-  --pos-candidate-registration /absolute/path/to/candidate-registration.json \
-  --pos-core-baseline-evidence /absolute/path/to/pre-pos-core-baseline.json \
-  --pos-benchmark-evidence /absolute/path/to/pos-evidence.json
-```
-
-The command returns zero only if all required inputs, quality gates, utility
-gates, alignment checks, and resource gates pass. Any rejected or malformed
-evaluation returns nonzero. A passing candidate must still have its final-run
-consumption recorded by the release owner; this test never mutates the
-registration file itself.
-
-Run the project-owned oracle controls separately during normal development:
-
-```sh
-uv run --no-sync pytest -q -m "not performance" tests/performance/test_pos_tagger.py
-```
-
-Those controls prove that a rotated UPOS output and a no-op POS filter are
-rejected. They do not certify a model.
+There is intentionally no root test command for this protocol. Normal pytest,
+Cargo, release CI, and artifact audits do not import, compile, or special-case
+the rejected generated-tagger architecture. The retained experiment commands
+are documented in `experiments/pos-linear/README.md`; they do not consume the
+protected final split or certify a model.
 
 ## Metrics and exact MWE utility
 

@@ -14,7 +14,7 @@ import pytest
 
 
 ROOT = Path(__file__).parents[1]
-TRAINER = ROOT / "bin" / "train-pos-linear.py"
+TRAINER = ROOT / "train.py"
 
 CONLLU = """# sent_id = 1
 1\tBright\tbright\tADJ\t_\t_\t0\troot\t_\t_

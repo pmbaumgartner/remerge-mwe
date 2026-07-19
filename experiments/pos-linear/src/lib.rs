@@ -10,8 +10,6 @@
 //! to `d`, and retains every other scalar. Context pairs use a literal `|`
 //! separator; boundary values are the literal `<BOS>` and `<EOS>`.
 
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -27,8 +25,7 @@ const TAGS: [&str; TAG_COUNT] = [
 ];
 const PAIR_SEPARATOR: char = '|';
 
-#[pyclass(frozen)]
-pub(crate) struct LinearPosModel {
+pub struct LinearPosModel {
     model_id: String,
     tokenizer_id: String,
     artifact_bytes: usize,
@@ -41,7 +38,7 @@ pub(crate) struct LinearPosModel {
 }
 
 impl LinearPosModel {
-    fn from_artifact(bytes: Vec<u8>) -> Result<Self, String> {
+    pub fn from_artifact(bytes: Vec<u8>) -> Result<Self, String> {
         let artifact_bytes = bytes.len();
         let artifact_sha256 = sha256_hex(&bytes);
         let mut reader = Reader::new(&bytes);
@@ -154,7 +151,7 @@ impl LinearPosModel {
         })
     }
 
-    fn tag_documents(
+    pub fn tag_documents(
         &self,
         documents: &[Vec<Vec<String>>],
     ) -> Result<Vec<Vec<Vec<String>>>, String> {
@@ -222,44 +219,33 @@ impl LinearPosModel {
     }
 }
 
-#[pymethods]
 impl LinearPosModel {
-    #[new]
-    fn new(path: &str) -> PyResult<Self> {
-        let artifact = fs::read(Path::new(path))
-            .map_err(|error| PyValueError::new_err(format!("cannot read POS model: {error}")))?;
-        Self::from_artifact(artifact).map_err(PyValueError::new_err)
+    pub fn new(path: &str) -> Result<Self, String> {
+        let artifact =
+            fs::read(Path::new(path)).map_err(|error| format!("cannot read POS model: {error}"))?;
+        Self::from_artifact(artifact)
     }
 
-    #[getter]
-    fn model_id(&self) -> &str {
+    pub fn model_id(&self) -> &str {
         &self.model_id
     }
 
-    #[getter]
-    fn tokenizer_id(&self) -> &str {
+    pub fn tokenizer_id(&self) -> &str {
         &self.tokenizer_id
     }
 
-    #[getter]
-    fn artifact_bytes(&self) -> usize {
+    pub fn artifact_bytes(&self) -> usize {
         self.artifact_bytes
     }
 
-    #[getter]
-    fn artifact_sha256(&self) -> &str {
+    pub fn artifact_sha256(&self) -> &str {
         &self.artifact_sha256
     }
 
     /// Tags an explicitly bounded document/sentence/form tensor without
-    /// changing any of its boundaries. The expensive loop runs without the GIL.
-    fn tag(
-        &self,
-        py: Python<'_>,
-        documents: Vec<Vec<Vec<String>>>,
-    ) -> PyResult<Vec<Vec<Vec<String>>>> {
-        py.allow_threads(|| self.tag_documents(&documents))
-            .map_err(PyValueError::new_err)
+    /// changing any of its boundaries.
+    pub fn tag(&self, documents: Vec<Vec<Vec<String>>>) -> Result<Vec<Vec<Vec<String>>>, String> {
+        self.tag_documents(&documents)
     }
 }
 

@@ -5,6 +5,10 @@ created: 2026-07-19
 
 # Pretagged-only POS technical release evaluation
 
+Post-review note: the rejected trainer and loader described below were later
+moved to `experiments/pos-linear/`; normal product tests and artifact audits no
+longer compile or special-case them.
+
 ## Recommendation
 
 **Authorize a prerelease to selected users, but do not authorize stable PyPI

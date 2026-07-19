@@ -8,7 +8,6 @@
 from importlib.metadata import version
 
 import remerge
-from remerge import _core
 
 
 def main() -> None:
@@ -63,8 +62,6 @@ def main() -> None:
     ]
     diagnostic = remerge.run_with_occurrences(["bright river"], 1, method="frequency")
     assert diagnostic[0].occurrences == (remerge.MweOccurrence(0, 0, 0, 2),)
-    assert not hasattr(_core, "LinearPosModel")
-
     print("remerge-mwe version:", version("remerge-mwe"))
     print("first winner:", winners[0].merged_lexeme.word)
     print("supplied-tag winner:", tagged[0].merged_lexeme.word)

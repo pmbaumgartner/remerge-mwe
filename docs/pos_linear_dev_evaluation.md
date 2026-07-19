@@ -1,6 +1,6 @@
 # Linear POS tagger development evaluation
 
-Status: production route rejected; experimental implementation retained.
+Status: production route rejected; experimental implementation isolated.
 
 Date: 2026-07-19
 
@@ -12,9 +12,10 @@ quality gate in `docs/pos_quality_contract.md`. The protected final split was
 not evaluated.
 
 Per the pre-authorized outcome fallback, v1 reshapes to the pretagged-only POS
-filtering path. The native model loader and deterministic trainer remain
-experimental, are not exposed through the public API, and must not be packaged
-with a model or described as production-ready.
+filtering path. The native model loader and deterministic trainer remain under
+`experiments/pos-linear/`. They are not members of the production Cargo
+package, are not exposed through the public API, and must not be packaged with
+a model or described as production-ready.
 
 ## Evidence
 
@@ -50,3 +51,15 @@ reports and artifacts are deliberately not release inputs.
 - Retain the experimental implementation only as reproducible research support.
   A future model attempt requires a new bounded packet and must pass the same
   frozen oracle before any public or packaging work resumes.
+
+## Isolated reproducibility
+
+The retained development-only checks run independently from the product graph:
+
+```sh
+cargo test --manifest-path experiments/pos-linear/Cargo.toml
+uv run --directory experiments/pos-linear pytest -q
+```
+
+The experiment has its own Cargo and Python lockfiles. Neither command reads
+the protected final split.

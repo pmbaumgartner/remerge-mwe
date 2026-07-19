@@ -61,8 +61,6 @@ def audit_wheel(path: Path) -> dict[str, object]:
         stub_names = [name for name in names if name.endswith("remerge/_core.pyi")]
         if len(stub_names) != 1:
             raise AssertionError("wheel must contain the native extension stub")
-        if b"LinearPosModel" in archive.read(stub_names[0]):
-            raise AssertionError("wheel exposes the rejected experimental model loader")
     return {"path": str(path), "sha256": digest(path), "members": names}
 
 
@@ -88,8 +86,6 @@ def audit_sdist(path: Path) -> dict[str, object]:
         if str(relative) in allowed_top_level:
             continue
         if relative.parts[:2] == ("rust", "src"):
-            if relative.name == "linear.rs":
-                raise AssertionError("sdist contains the rejected experimental loader")
             continue
         if relative.parts[:2] == ("src", "remerge"):
             continue

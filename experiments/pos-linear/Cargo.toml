@@ -1,0 +1,11 @@
+[package]
+name = "remerge-pos-linear-experiment"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sha2 = "0.10"
+
+[lib]
+path = "src/lib.rs"

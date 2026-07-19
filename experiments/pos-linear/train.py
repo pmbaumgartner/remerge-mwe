@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the small, deterministic POS model consumed by remerge.
+"""Train the isolated linear POS research model.
 
 The script intentionally accepts only project-controlled train and development
 CoNLL-U inputs.  It has no download path and deliberately has no ``--final``
