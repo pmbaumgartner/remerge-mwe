@@ -148,17 +148,25 @@ def test_project_authored_pretagged_utility_fixture_is_useful() -> None:
 def test_pretagged_release_benchmark(pytestconfig: pytest.Config) -> None:
     evidence_path = pytestconfig.getoption("--pos-pretagged-evidence")
     baseline_path = pytestconfig.getoption("--pos-pretagged-core-baseline-evidence")
+    source_revision = os.getenv("REMERGE_POS_SOURCE_REVISION")
     if not evidence_path or not baseline_path:
         pytest.fail(
             "--pos-pretagged-evidence and "
             "--pos-pretagged-core-baseline-evidence are required"
         )
+    if (
+        source_revision is None
+        or len(source_revision) != 40
+        or any(character not in "0123456789abcdef" for character in source_revision)
+    ):
+        pytest.fail("REMERGE_POS_SOURCE_REVISION must be a full lowercase Git SHA")
 
     evidence: dict[str, Any] = {
         "schema_version": 1,
         "status": "rejected",
         "generated_at_unix": time(),
         "command": " ".join(pytestconfig.invocation_params.args),
+        "source_revision": source_revision,
         "machine": machine_metadata(),
         "protected_final_evaluated": False,
         "protocol": {
