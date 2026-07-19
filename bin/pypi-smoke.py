@@ -32,6 +32,7 @@ def main() -> None:
         patterns=[("ADJ", "NOUN")],
         method="frequency",
     )
+    assert isinstance(tagged[0], remerge.WinnerWithOccurrences)
     assert tagged[0].merged_lexeme.word == ("bright", "river")
     assert tagged[0].occurrences == (remerge.MweOccurrence(0, 0, 0, 2),)
 
@@ -61,6 +62,7 @@ def main() -> None:
         )
     ]
     diagnostic = remerge.run_with_occurrences(["bright river"], 1, method="frequency")
+    assert isinstance(diagnostic[0], remerge.WinnerWithOccurrences)
     assert diagnostic[0].occurrences == (remerge.MweOccurrence(0, 0, 0, 2),)
     print("remerge-mwe version:", version("remerge-mwe"))
     print("first winner:", winners[0].merged_lexeme.word)
