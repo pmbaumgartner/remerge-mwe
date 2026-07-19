@@ -166,4 +166,5 @@ repomix-output.xml
 repomix-output.md
 *.arrow
 data/
+.kata/
 .kata.local.toml
