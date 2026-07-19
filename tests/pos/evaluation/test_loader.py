@@ -6,7 +6,13 @@ from typing import cast
 
 import pytest
 
-from tests.pos.evaluation.loader import ManifestError, load_manifest, load_tagged_split, read_conllu, validate_manifest
+from tests.pos.evaluation.loader import (
+    ManifestError,
+    load_manifest,
+    load_tagged_split,
+    read_conllu,
+    validate_manifest,
+)
 
 
 def test_frozen_manifest_is_structurally_valid() -> None:
@@ -16,7 +22,10 @@ def test_frozen_manifest_is_structurally_valid() -> None:
     assert manifest["release_adequate"] is True
     protected_final = manifest["protected_final"]
     assert isinstance(protected_final, dict)
-    assert cast(dict[str, object], protected_final)["candidate_registration_required"] is True
+    assert (
+        cast(dict[str, object], protected_final)["candidate_registration_required"]
+        is True
+    )
 
 
 def test_manifest_rejects_a_missing_split() -> None:
@@ -42,7 +51,9 @@ def test_final_split_requires_explicit_protected_harness_authorization() -> None
         load_tagged_split(load_manifest(), Path("not-used"), "final")
 
 
-def test_conllu_reader_preserves_integer_words_and_rejects_non_nfc(tmp_path: Path) -> None:
+def test_conllu_reader_preserves_integer_words_and_rejects_non_nfc(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "sample.conllu"
     source.write_text(
         "# newdoc id = reviews-1\n"
@@ -56,7 +67,10 @@ def test_conllu_reader_preserves_integer_words_and_rejects_non_nfc(tmp_path: Pat
 
     sentences = tuple(read_conllu(source))
 
-    assert [(token.form, token.upos) for token in sentences[0].tokens] == [("can", "AUX"), ("not", "PART")]
+    assert [(token.form, token.upos) for token in sentences[0].tokens] == [
+        ("can", "AUX"),
+        ("not", "PART"),
+    ]
 
     source.write_text(
         "# newdoc id = reviews-1\n# sent_id = reviews-1-1\n1\te\u0301\te\u0301\tNOUN\t_\t_\t0\troot\t_\t_\n\n",

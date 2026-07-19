@@ -140,7 +140,9 @@ def validate_manifest(manifest: Mapping[str, object]) -> None:
         _sha256(split.get("sha256"), f"splits.{name}.sha256")
         if not isinstance(split.get("path"), str) or not split["path"]:
             raise ManifestError(f"splits.{name}.path must be a non-empty string")
-        _int(split.get("expected_source_tokens"), f"splits.{name}.expected_source_tokens")
+        _int(
+            split.get("expected_source_tokens"), f"splits.{name}.expected_source_tokens"
+        )
         if _int(split.get("expected_tokens"), f"splits.{name}.expected_tokens") <= 0:
             raise ManifestError(f"splits.{name}.expected_tokens must be positive")
     final_split = _mapping(splits["final"], "splits.final")
@@ -162,12 +164,18 @@ def validate_manifest(manifest: Mapping[str, object]) -> None:
     if mwe.get("source") not in sources:
         raise ManifestError("mwe_gold.source is not a declared source")
     _sha256(mwe.get("sha256"), "mwe_gold.sha256")
-    for field in ("minimum_in_scope_spans", "expected_contiguous_strong_spans", "expected_unretained_sentences"):
+    for field in (
+        "minimum_in_scope_spans",
+        "expected_contiguous_strong_spans",
+        "expected_unretained_sentences",
+    ):
         if _int(mwe.get(field), f"mwe_gold.{field}") < 0:
             raise ManifestError(f"mwe_gold.{field} must not be negative")
 
 
-def validate_acquired_dataset(manifest: Mapping[str, object], acquisition_root: Path) -> DatasetValidation:
+def validate_acquired_dataset(
+    manifest: Mapping[str, object], acquisition_root: Path
+) -> DatasetValidation:
     """Verify frozen hashes, split isolation, POS slices, and STREUSLE alignment.
 
     This is the only function that reads final gold data.  Call it from the
@@ -178,23 +186,34 @@ def validate_acquired_dataset(manifest: Mapping[str, object], acquisition_root: 
     sources = _mapping(manifest["sources"], "sources")
     for name, source_value in sources.items():
         source = _mapping(source_value, f"sources.{name}")
-        root = acquisition_root / _string(source["relative_root"], f"sources.{name}.relative_root")
-        _verify_sha256(root / "LICENSE.txt", _string(source["license_sha256"], "license_sha256"))
+        root = acquisition_root / _string(
+            source["relative_root"], f"sources.{name}.relative_root"
+        )
+        _verify_sha256(
+            root / "LICENSE.txt", _string(source["license_sha256"], "license_sha256")
+        )
 
     splits = _mapping(manifest["splits"], "splits")
     parsed_splits: dict[str, tuple[Sentence, ...]] = {}
     for split_name, split_value in splits.items():
         split = _mapping(split_value, f"splits.{split_name}")
         source = _mapping(sources[_string(split["source"], "split source")], "source")
-        path = acquisition_root / _string(source["relative_root"], "source root") / _string(split["path"], "split path")
+        path = (
+            acquisition_root
+            / _string(source["relative_root"], "source root")
+            / _string(split["path"], "split path")
+        )
         _verify_sha256(path, _string(split["sha256"], "split hash"))
         sentences = tuple(read_conllu(path))
         source_count = sum(len(sentence.tokens) for sentence in sentences)
         expected_source_tokens = _int(
-            split["expected_source_tokens"], f"splits.{split_name}.expected_source_tokens"
+            split["expected_source_tokens"],
+            f"splits.{split_name}.expected_source_tokens",
         )
         if source_count != expected_source_tokens:
-            raise ManifestError(f"{split_name} source token count {source_count} != frozen {expected_source_tokens}")
+            raise ManifestError(
+                f"{split_name} source token count {source_count} != frozen {expected_source_tokens}"
+            )
         parsed_splits[split_name] = sentences
 
     parsed_splits = _deduplicate_splits(parsed_splits)
@@ -205,10 +224,16 @@ def validate_acquired_dataset(manifest: Mapping[str, object], acquisition_root: 
         )
         count = sum(len(sentence.tokens) for sentence in sentences)
         if count != expected_tokens:
-            raise ManifestError(f"{split_name} retained token count {count} != frozen {expected_tokens}")
+            raise ManifestError(
+                f"{split_name} retained token count {count} != frozen {expected_tokens}"
+            )
     _assert_split_isolation(parsed_splits)
-    final_tokens = tuple(token for sentence in parsed_splits["final"] for token in sentence.tokens)
-    train_tokens = tuple(token for sentence in parsed_splits["train"] for token in sentence.tokens)
+    final_tokens = tuple(
+        token for sentence in parsed_splits["final"] for token in sentence.tokens
+    )
+    train_tokens = tuple(
+        token for sentence in parsed_splits["train"] for token in sentence.tokens
+    )
     training_forms = {token.form for token in train_tokens}
     training_tags = defaultdict(set)
     for token in train_tokens:
@@ -218,24 +243,40 @@ def validate_acquired_dataset(manifest: Mapping[str, object], acquisition_root: 
     domains = Counter(token.domain for token in final_tokens)
 
     final_spec = _mapping(splits["final"], "splits.final")
-    if len(final_tokens) < _int(final_spec["minimum_tokens"], "splits.final.minimum_tokens"):
+    if len(final_tokens) < _int(
+        final_spec["minimum_tokens"], "splits.final.minimum_tokens"
+    ):
         raise ManifestError("final split does not meet its frozen token floor")
     if oov < _int(final_spec["minimum_oov_tokens"], "splits.final.minimum_oov_tokens"):
         raise ManifestError("final split does not meet its frozen OOV floor")
-    if ambiguous < _int(final_spec["minimum_ambiguous_tokens"], "splits.final.minimum_ambiguous_tokens"):
+    if ambiguous < _int(
+        final_spec["minimum_ambiguous_tokens"], "splits.final.minimum_ambiguous_tokens"
+    ):
         raise ManifestError("final split does not meet its frozen ambiguity floor")
-    for domain, expected_count_value in _mapping(manifest["named_domains"], "named_domains").items():
+    for domain, expected_count_value in _mapping(
+        manifest["named_domains"], "named_domains"
+    ).items():
         expected_count = _int(expected_count_value, f"named_domains.{domain}")
         if domains[domain] != expected_count:
-            raise ManifestError(f"final domain {domain!r} has {domains[domain]} tokens, expected {expected_count}")
+            raise ManifestError(
+                f"final domain {domain!r} has {domains[domain]} tokens, expected {expected_count}"
+            )
         if domains[domain] < _int(
-            final_spec["minimum_tokens_per_named_domain"], "splits.final.minimum_tokens_per_named_domain"
+            final_spec["minimum_tokens_per_named_domain"],
+            "splits.final.minimum_tokens_per_named_domain",
         ):
-            raise ManifestError(f"final domain {domain!r} falls below the frozen adequacy floor")
+            raise ManifestError(
+                f"final domain {domain!r} falls below the frozen adequacy floor"
+            )
 
-    mwe_spans = _load_final_mwe_spans(manifest, acquisition_root, parsed_splits["final"])
+    mwe_spans = _load_final_mwe_spans(
+        manifest, acquisition_root, parsed_splits["final"]
+    )
     return DatasetValidation(
-        split_tokens={name: sum(len(sentence.tokens) for sentence in sentences) for name, sentences in parsed_splits.items()},
+        split_tokens={
+            name: sum(len(sentence.tokens) for sentence in sentences)
+            for name, sentences in parsed_splits.items()
+        },
         final_oov_tokens=oov,
         final_ambiguous_tokens=ambiguous,
         final_domain_tokens=dict(domains),
@@ -244,7 +285,11 @@ def validate_acquired_dataset(manifest: Mapping[str, object], acquisition_root: 
 
 
 def load_tagged_split(
-    manifest: Mapping[str, object], acquisition_root: Path, split_name: str, *, allow_final: bool = False
+    manifest: Mapping[str, object],
+    acquisition_root: Path,
+    split_name: str,
+    *,
+    allow_final: bool = False,
 ) -> tuple[Sentence, ...]:
     """Load one checksum-verified canonical split without retokenizing it."""
 
@@ -252,32 +297,52 @@ def load_tagged_split(
     if split_name not in {"train", "dev", "final"}:
         raise ManifestError(f"unknown split {split_name!r}")
     if split_name == "final" and not allow_final:
-        raise ManifestError("final split requires explicit protected-harness authorization")
+        raise ManifestError(
+            "final split requires explicit protected-harness authorization"
+        )
     splits = _mapping(manifest["splits"], "splits")
     sources = _mapping(manifest["sources"], "sources")
     split_order = ("train", "dev", "final")
     raw_splits: dict[str, tuple[Sentence, ...]] = {}
     for name in split_order[: split_order.index(split_name) + 1]:
         split = _mapping(splits[name], f"splits.{name}")
-        source = _mapping(sources[_string(split["source"], "split source")], "split source")
-        path = acquisition_root / _string(source["relative_root"], "source root") / _string(split["path"], "split path")
+        source = _mapping(
+            sources[_string(split["source"], "split source")], "split source"
+        )
+        path = (
+            acquisition_root
+            / _string(source["relative_root"], "source root")
+            / _string(split["path"], "split path")
+        )
         _verify_sha256(path, _string(split["sha256"], "split hash"))
         raw_splits[name] = tuple(read_conllu(path))
     sentences = _deduplicate_splits(raw_splits)[split_name]
-    expected = _int(_mapping(splits[split_name], f"splits.{split_name}")["expected_tokens"], "expected_tokens")
+    expected = _int(
+        _mapping(splits[split_name], f"splits.{split_name}")["expected_tokens"],
+        "expected_tokens",
+    )
     if sum(len(sentence.tokens) for sentence in sentences) != expected:
-        raise ManifestError(f"{split_name} retained token count does not match the frozen manifest")
+        raise ManifestError(
+            f"{split_name} retained token count does not match the frozen manifest"
+        )
     return sentences
 
 
-def load_final_gold(manifest: Mapping[str, object], acquisition_root: Path, *, allow_final: bool = False) -> FinalGold:
+def load_final_gold(
+    manifest: Mapping[str, object], acquisition_root: Path, *, allow_final: bool = False
+) -> FinalGold:
     """Load protected final units after every frozen adequacy check has passed."""
 
     if not allow_final:
-        raise ManifestError("final gold requires explicit protected-harness authorization")
+        raise ManifestError(
+            "final gold requires explicit protected-harness authorization"
+        )
     validate_acquired_dataset(manifest, acquisition_root)
     sentences = load_tagged_split(manifest, acquisition_root, "final", allow_final=True)
-    return FinalGold(sentences=sentences, mwe_spans=_load_final_mwe_spans(manifest, acquisition_root, sentences))
+    return FinalGold(
+        sentences=sentences,
+        mwe_spans=_load_final_mwe_spans(manifest, acquisition_root, sentences),
+    )
 
 
 def read_conllu(path: Path) -> Iterable[Sentence]:
@@ -286,7 +351,9 @@ def read_conllu(path: Path) -> Iterable[Sentence]:
     document_id: str | None = None
     sentence_id: str | None = None
     rows: list[Token] = []
-    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines() + [""], start=1):
+    for line_number, raw_line in enumerate(
+        path.read_text(encoding="utf-8").splitlines() + [""], start=1
+    ):
         if raw_line.startswith("# newdoc id = "):
             document_id = raw_line.removeprefix("# newdoc id = ").strip()
             if not document_id:
@@ -306,7 +373,9 @@ def read_conllu(path: Path) -> Iterable[Sentence]:
             if not fields[0].isdigit():
                 continue
             if document_id is None or sentence_id is None:
-                raise ManifestError(f"{path}:{line_number}: word row lacks document or sentence ID")
+                raise ManifestError(
+                    f"{path}:{line_number}: word row lacks document or sentence ID"
+                )
             form, upos = fields[1], fields[3]
             if not form or any(character.isspace() for character in form):
                 raise ManifestError(f"{path}:{line_number}: invalid canonical FORM")
@@ -314,23 +383,40 @@ def read_conllu(path: Path) -> Iterable[Sentence]:
                 raise ManifestError(f"{path}:{line_number}: FORM is not NFC")
             if upos not in UPOS_TAGS:
                 raise ManifestError(f"{path}:{line_number}: invalid UPOS {upos!r}")
-            rows.append(Token(document_id, sentence_id, len(rows), form, upos, _domain(document_id)))
+            rows.append(
+                Token(
+                    document_id,
+                    sentence_id,
+                    len(rows),
+                    form,
+                    upos,
+                    _domain(document_id),
+                )
+            )
             continue
         if rows:
             yield Sentence(rows[0].document_id, rows[0].sentence_id, tuple(rows))
             rows = []
         sentence_id = None
     if rows:
-        raise AssertionError("sentinel blank line should have emitted the last sentence")
+        raise AssertionError(
+            "sentinel blank line should have emitted the last sentence"
+        )
 
 
 def _load_final_mwe_spans(
-    manifest: Mapping[str, object], acquisition_root: Path, final_sentences: tuple[Sentence, ...]
+    manifest: Mapping[str, object],
+    acquisition_root: Path,
+    final_sentences: tuple[Sentence, ...],
 ) -> frozenset[MweSpan]:
     sources = _mapping(manifest["sources"], "sources")
     mwe = _mapping(manifest["mwe_gold"], "mwe_gold")
     source = _mapping(sources[_string(mwe["source"], "mwe source")], "mwe source")
-    path = acquisition_root / _string(source["relative_root"], "mwe source root") / _string(mwe["path"], "mwe path")
+    path = (
+        acquisition_root
+        / _string(source["relative_root"], "mwe source root")
+        / _string(mwe["path"], "mwe path")
+    )
     _verify_sha256(path, _string(mwe["sha256"], "mwe hash"))
     final_by_sentence = {sentence.sentence_id: sentence for sentence in final_sentences}
     spans: set[MweSpan] = set()
@@ -342,29 +428,46 @@ def _load_final_mwe_spans(
             continue
         observed = tuple((token.form, token.upos) for token in expected.tokens)
         if observed != tokens:
-            raise ManifestError(f"STREUSLE sentence {sentence_id!r} does not canonically align to EWT")
+            raise ManifestError(
+                f"STREUSLE sentence {sentence_id!r} does not canonically align to EWT"
+            )
         for indices in strong_mwes.values():
             ordered = tuple(sorted(indices))
             if len(ordered) < 2 or ordered != tuple(range(ordered[0], ordered[-1] + 1)):
                 continue
-            spans.add(MweSpan(expected.document_id, sentence_id, ordered[0], ordered[-1] + 1))
-    expected_spans = _int(mwe["expected_contiguous_strong_spans"], "mwe_gold.expected_contiguous_strong_spans")
+            spans.add(
+                MweSpan(expected.document_id, sentence_id, ordered[0], ordered[-1] + 1)
+            )
+    expected_spans = _int(
+        mwe["expected_contiguous_strong_spans"],
+        "mwe_gold.expected_contiguous_strong_spans",
+    )
     if len(spans) != expected_spans:
-        raise ManifestError(f"contiguous strong MWE span count {len(spans)} != frozen {expected_spans}")
-    if len(spans) < _int(mwe["minimum_in_scope_spans"], "mwe_gold.minimum_in_scope_spans"):
+        raise ManifestError(
+            f"contiguous strong MWE span count {len(spans)} != frozen {expected_spans}"
+        )
+    if len(spans) < _int(
+        mwe["minimum_in_scope_spans"], "mwe_gold.minimum_in_scope_spans"
+    ):
         raise ManifestError("MWE gold span count is below the frozen adequacy floor")
-    if unretained_sentences != _int(mwe["expected_unretained_sentences"], "mwe_gold.expected_unretained_sentences"):
+    if unretained_sentences != _int(
+        mwe["expected_unretained_sentences"], "mwe_gold.expected_unretained_sentences"
+    ):
         raise ManifestError(
             f"STREUSLE unretained sentence count {unretained_sentences} != frozen {mwe['expected_unretained_sentences']}"
         )
     return frozenset(spans)
 
 
-def _read_streusle(path: Path) -> Iterable[tuple[str, tuple[tuple[str, str], ...], Mapping[str, set[int]]]]:
+def _read_streusle(
+    path: Path,
+) -> Iterable[tuple[str, tuple[tuple[str, str], ...], Mapping[str, set[int]]]]:
     sentence_id: str | None = None
     tokens: list[tuple[str, str]] = []
     strong_mwes: dict[str, set[int]] = defaultdict(set)
-    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines() + [""], start=1):
+    for line_number, raw_line in enumerate(
+        path.read_text(encoding="utf-8").splitlines() + [""], start=1
+    ):
         if raw_line.startswith("# sent_id = "):
             sentence_id = raw_line.removeprefix("# sent_id = ").strip()
             continue
@@ -383,7 +486,9 @@ def _read_streusle(path: Path) -> Iterable[tuple[str, tuple[tuple[str, str], ...
                         group, index = member.split(":", 1)
                         strong_mwes[group].add(int(index) - 1)
                     except ValueError as exc:
-                        raise ManifestError(f"{path}:{line_number}: malformed strong MWE membership") from exc
+                        raise ManifestError(
+                            f"{path}:{line_number}: malformed strong MWE membership"
+                        ) from exc
             continue
         if sentence_id is not None:
             yield sentence_id, tuple(tokens), strong_mwes
@@ -399,14 +504,20 @@ def _assert_split_isolation(parsed_splits: Mapping[str, tuple[Sentence, ...]]) -
         for sentence in sentences:
             existing_document = document_owner.setdefault(sentence.document_id, split)
             if existing_document != split:
-                raise ManifestError(f"document {sentence.document_id!r} crosses {existing_document}/{split}")
+                raise ManifestError(
+                    f"document {sentence.document_id!r} crosses {existing_document}/{split}"
+                )
             sequence = sentence.normalized_sequence
             existing_sequence = sequence_owner.setdefault(sequence, split)
             if existing_sequence != split:
-                raise ManifestError(f"normalized token sequence crosses {existing_sequence}/{split}: {sequence!r}")
+                raise ManifestError(
+                    f"normalized token sequence crosses {existing_sequence}/{split}: {sequence!r}"
+                )
 
 
-def _deduplicate_splits(parsed_splits: Mapping[str, tuple[Sentence, ...]]) -> dict[str, tuple[Sentence, ...]]:
+def _deduplicate_splits(
+    parsed_splits: Mapping[str, tuple[Sentence, ...]],
+) -> dict[str, tuple[Sentence, ...]]:
     """Retain each normalized sentence once, with frozen train/dev/final precedence."""
 
     retained: dict[str, tuple[Sentence, ...]] = {}
@@ -455,5 +566,9 @@ def _int(value: object, name: str) -> int:
 
 
 def _sha256(value: object, name: str) -> None:
-    if not isinstance(value, str) or len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
         raise ManifestError(f"{name} must be a lowercase SHA-256 digest")
