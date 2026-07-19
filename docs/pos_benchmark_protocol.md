@@ -21,7 +21,7 @@ under `experiments/pos-linear/` and use development data only.
   committed, downloaded by the test, put in a package, or read by ordinary
   training/dev tests.
 - `tests/pos/evaluation/loader.py` is the only accepted loader. Its
-  `load_final_gold(..., allow_final=True)` path verifies source checksums,
+  `load_gold_split(..., split="final", allow_final=True)` path verifies source checksums,
   split isolation, adequacy floors, canonical CoNLL-U alignment, and the
   adjudicated MWE spans before the release harness sees a final token.
 - The 100,000-token runtime fixture is generated in

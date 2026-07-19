@@ -64,17 +64,36 @@
   },
   "mwe_gold": {
     "source": "streusle",
-    "path": "test/streusle.ud_test.conllulex",
-    "sha256": "1c518a55da556e83123d72317e6b7353bc73b6a37d85a89110116ca944c8c397",
-    "sentence_alignment": "STREUSLE v4.5 test sentence IDs and canonical integer-word (FORM, UPOS) sequences must exactly match UD EWT r2.10 final review sentences.",
-    "span_policy": "Use only contiguous, strong STREUSLE MWEs with at least two words. Exclude gappy and weak MWEs because the v1 discovery result is a contiguous occurrence span.",
-    "minimum_in_scope_spans": 200,
-    "expected_contiguous_strong_spans": 229,
-    "expected_unretained_sentences": 12
+    "splits": {
+      "dev": {
+        "path": "dev/streusle.ud_dev.conllulex",
+        "sha256": "37d940dbeb0f4d63ed8d0929f91980e491f79a907b7d28c48ec6e242f2db94d6",
+        "sentence_alignment": "STREUSLE v4.5 dev sentence IDs and canonical integer-word (FORM, UPOS) sequences must exactly match retained UD EWT r2.10 dev review sentences.",
+        "evaluation_scope": "annotated_sentences",
+        "span_policy": "exact_two_tokens_matching_filter_patterns",
+        "minimum_in_scope_spans": 1,
+        "expected_spans": 23,
+        "expected_unretained_sentences": 0,
+        "expected_documents": 192,
+        "expected_sentences": 546,
+        "expected_tokens": 5366
+      },
+      "final": {
+        "path": "test/streusle.ud_test.conllulex",
+        "sha256": "1c518a55da556e83123d72317e6b7353bc73b6a37d85a89110116ca944c8c397",
+        "sentence_alignment": "STREUSLE v4.5 test sentence IDs and canonical integer-word (FORM, UPOS) sequences must exactly match retained UD EWT r2.10 final review sentences.",
+        "evaluation_scope": "full_split",
+        "span_policy": "contiguous_strong_length_two_or_more",
+        "minimum_in_scope_spans": 200,
+        "expected_spans": 229,
+        "expected_unretained_sentences": 12,
+        "expected_tokens": 24575
+      }
+    }
   },
   "filter_configuration": {
     "patterns": [["ADJ", "NOUN"], ["NOUN", "NOUN"], ["VERB", "NOUN"], ["VERB", "PART"]],
-    "score_method": "ll",
+    "score_method": "log_likelihood",
     "min_count": 2,
     "min_score": 0.0,
     "on_exhausted": "stop",

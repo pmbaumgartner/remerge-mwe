@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 import unicodedata
 
 
@@ -87,9 +87,10 @@ class MweSpan:
 
 
 @dataclass(frozen=True)
-class FinalGold:
-    """Protected final canonical tokens and adjudicated contiguous MWE spans."""
+class GoldSplit:
+    """Canonical evaluation sentences and adjudicated in-scope MWE spans."""
 
+    split: Literal["dev", "final"]
     sentences: tuple[Sentence, ...]
     mwe_spans: frozenset[MweSpan]
 
@@ -160,17 +161,64 @@ def validate_manifest(manifest: Mapping[str, object]) -> None:
         if not isinstance(source.get("relative_root"), str):
             raise ManifestError(f"sources.{name}.relative_root must be a string")
 
+    filter_configuration = _mapping(
+        manifest["filter_configuration"], "filter_configuration"
+    )
+    patterns = filter_configuration.get("patterns")
+    if not isinstance(patterns, list) or not patterns:
+        raise ManifestError("filter_configuration.patterns must be a non-empty list")
+    for index, pattern in enumerate(patterns):
+        if (
+            not isinstance(pattern, list)
+            or len(pattern) != 2
+            or any(tag not in UPOS_TAGS for tag in pattern)
+        ):
+            raise ManifestError(
+                f"filter_configuration.patterns[{index}] must contain two UPOS tags"
+            )
+
     mwe = _mapping(manifest["mwe_gold"], "mwe_gold")
     if mwe.get("source") not in sources:
         raise ManifestError("mwe_gold.source is not a declared source")
-    _sha256(mwe.get("sha256"), "mwe_gold.sha256")
-    for field in (
-        "minimum_in_scope_spans",
-        "expected_contiguous_strong_spans",
-        "expected_unretained_sentences",
-    ):
-        if _int(mwe.get(field), f"mwe_gold.{field}") < 0:
-            raise ManifestError(f"mwe_gold.{field} must not be negative")
+    mwe_splits = _mapping(mwe.get("splits"), "mwe_gold.splits")
+    if set(mwe_splits) != {"dev", "final"}:
+        raise ManifestError("mwe_gold.splits must define exactly dev and final")
+    for split_name, split_value in mwe_splits.items():
+        split = _mapping(split_value, f"mwe_gold.splits.{split_name}")
+        _sha256(split.get("sha256"), f"mwe_gold.splits.{split_name}.sha256")
+        if not isinstance(split.get("path"), str) or not split["path"]:
+            raise ManifestError(
+                f"mwe_gold.splits.{split_name}.path must be a non-empty string"
+            )
+        if split.get("evaluation_scope") not in {"annotated_sentences", "full_split"}:
+            raise ManifestError(
+                f"mwe_gold.splits.{split_name}.evaluation_scope is unsupported"
+            )
+        if split.get("span_policy") not in {
+            "exact_two_tokens_matching_filter_patterns",
+            "contiguous_strong_length_two_or_more",
+        }:
+            raise ManifestError(
+                f"mwe_gold.splits.{split_name}.span_policy is unsupported"
+            )
+        for field in (
+            "minimum_in_scope_spans",
+            "expected_spans",
+            "expected_unretained_sentences",
+            "expected_tokens",
+        ):
+            if _int(split.get(field), f"mwe_gold.splits.{split_name}.{field}") < 0:
+                raise ManifestError(
+                    f"mwe_gold.splits.{split_name}.{field} must not be negative"
+                )
+        for field in ("expected_documents", "expected_sentences"):
+            if (
+                field in split
+                and _int(split[field], f"mwe_gold.splits.{split_name}.{field}") < 0
+            ):
+                raise ManifestError(
+                    f"mwe_gold.splits.{split_name}.{field} must not be negative"
+                )
 
 
 def validate_acquired_dataset(
@@ -269,8 +317,8 @@ def validate_acquired_dataset(
                 f"final domain {domain!r} falls below the frozen adequacy floor"
             )
 
-    mwe_spans = _load_final_mwe_spans(
-        manifest, acquisition_root, parsed_splits["final"]
+    _sentences, mwe_spans = _load_mwe_gold(
+        manifest, acquisition_root, "final", parsed_splits["final"]
     )
     return DatasetValidation(
         split_tokens={
@@ -328,21 +376,28 @@ def load_tagged_split(
     return sentences
 
 
-def load_final_gold(
-    manifest: Mapping[str, object], acquisition_root: Path, *, allow_final: bool = False
-) -> FinalGold:
-    """Load protected final units after every frozen adequacy check has passed."""
+def load_gold_split(
+    manifest: Mapping[str, object],
+    acquisition_root: Path,
+    split: Literal["dev", "final"],
+    *,
+    allow_final: bool = False,
+) -> GoldSplit:
+    """Load one canonical POS/MWE evaluation split under its frozen policy."""
 
-    if not allow_final:
-        raise ManifestError(
-            "final gold requires explicit protected-harness authorization"
-        )
-    validate_acquired_dataset(manifest, acquisition_root)
-    sentences = load_tagged_split(manifest, acquisition_root, "final", allow_final=True)
-    return FinalGold(
-        sentences=sentences,
-        mwe_spans=_load_final_mwe_spans(manifest, acquisition_root, sentences),
+    if split not in {"dev", "final"}:
+        raise ManifestError(f"gold is unavailable for split {split!r}")
+    if split == "final":
+        if not allow_final:
+            raise ManifestError(
+                "final gold requires explicit protected-harness authorization"
+            )
+        validate_acquired_dataset(manifest, acquisition_root)
+    canonical = load_tagged_split(
+        manifest, acquisition_root, split, allow_final=allow_final
     )
+    sentences, spans = _load_mwe_gold(manifest, acquisition_root, split, canonical)
+    return GoldSplit(split=split, sentences=sentences, mwe_spans=spans)
 
 
 def read_conllu(path: Path) -> Iterable[Sentence]:
@@ -404,25 +459,33 @@ def read_conllu(path: Path) -> Iterable[Sentence]:
         )
 
 
-def _load_final_mwe_spans(
+def _load_mwe_gold(
     manifest: Mapping[str, object],
     acquisition_root: Path,
-    final_sentences: tuple[Sentence, ...],
-) -> frozenset[MweSpan]:
+    split_name: Literal["dev", "final"],
+    canonical_sentences: tuple[Sentence, ...],
+) -> tuple[tuple[Sentence, ...], frozenset[MweSpan]]:
     sources = _mapping(manifest["sources"], "sources")
     mwe = _mapping(manifest["mwe_gold"], "mwe_gold")
+    mwe_split = _mapping(
+        _mapping(mwe["splits"], "mwe_gold.splits")[split_name],
+        f"mwe_gold.splits.{split_name}",
+    )
     source = _mapping(sources[_string(mwe["source"], "mwe source")], "mwe source")
     path = (
         acquisition_root
         / _string(source["relative_root"], "mwe source root")
-        / _string(mwe["path"], "mwe path")
+        / _string(mwe_split["path"], "mwe path")
     )
-    _verify_sha256(path, _string(mwe["sha256"], "mwe hash"))
-    final_by_sentence = {sentence.sentence_id: sentence for sentence in final_sentences}
+    _verify_sha256(path, _string(mwe_split["sha256"], "mwe hash"))
+    canonical_by_sentence = {
+        sentence.sentence_id: sentence for sentence in canonical_sentences
+    }
+    aligned_sentences: list[Sentence] = []
     spans: set[MweSpan] = set()
     unretained_sentences = 0
     for sentence_id, tokens, strong_mwes in _read_streusle(path):
-        expected = final_by_sentence.get(sentence_id)
+        expected = canonical_by_sentence.get(sentence_id)
         if expected is None:
             unretained_sentences += 1
             continue
@@ -431,32 +494,82 @@ def _load_final_mwe_spans(
             raise ManifestError(
                 f"STREUSLE sentence {sentence_id!r} does not canonically align to EWT"
             )
+        aligned_sentences.append(expected)
         for indices in strong_mwes.values():
             ordered = tuple(sorted(indices))
-            if len(ordered) < 2 or ordered != tuple(range(ordered[0], ordered[-1] + 1)):
+            if not _span_is_in_scope(manifest, mwe_split, expected, ordered):
                 continue
             spans.add(
                 MweSpan(expected.document_id, sentence_id, ordered[0], ordered[-1] + 1)
             )
-    expected_spans = _int(
-        mwe["expected_contiguous_strong_spans"],
-        "mwe_gold.expected_contiguous_strong_spans",
-    )
+    expected_spans = _int(mwe_split["expected_spans"], "mwe expected spans")
     if len(spans) != expected_spans:
         raise ManifestError(
             f"contiguous strong MWE span count {len(spans)} != frozen {expected_spans}"
         )
     if len(spans) < _int(
-        mwe["minimum_in_scope_spans"], "mwe_gold.minimum_in_scope_spans"
+        mwe_split["minimum_in_scope_spans"], "mwe minimum in-scope spans"
     ):
         raise ManifestError("MWE gold span count is below the frozen adequacy floor")
     if unretained_sentences != _int(
-        mwe["expected_unretained_sentences"], "mwe_gold.expected_unretained_sentences"
+        mwe_split["expected_unretained_sentences"], "mwe unretained sentences"
     ):
         raise ManifestError(
-            f"STREUSLE unretained sentence count {unretained_sentences} != frozen {mwe['expected_unretained_sentences']}"
+            "STREUSLE unretained sentence count "
+            f"{unretained_sentences} != frozen {mwe_split['expected_unretained_sentences']}"
         )
-    return frozenset(spans)
+    scope = _string(mwe_split["evaluation_scope"], "mwe evaluation scope")
+    sentences = (
+        tuple(aligned_sentences)
+        if scope == "annotated_sentences"
+        else canonical_sentences
+    )
+    _validate_gold_shape(mwe_split, sentences)
+    return sentences, frozenset(spans)
+
+
+def _span_is_in_scope(
+    manifest: Mapping[str, object],
+    mwe_split: Mapping[str, object],
+    sentence: Sentence,
+    ordered: tuple[int, ...],
+) -> bool:
+    policy = _string(mwe_split["span_policy"], "mwe span policy")
+    if policy == "contiguous_strong_length_two_or_more":
+        return len(ordered) >= 2 and ordered == tuple(
+            range(ordered[0], ordered[-1] + 1)
+        )
+    if len(ordered) != 2 or ordered != (ordered[0], ordered[0] + 1):
+        return False
+    patterns = _mapping(manifest["filter_configuration"], "filter configuration")[
+        "patterns"
+    ]
+    if not isinstance(patterns, list):
+        raise ManifestError("filter_configuration.patterns must be a list")
+    accepted = {tuple(pattern) for pattern in patterns if isinstance(pattern, list)}
+    try:
+        tags = tuple(sentence.tokens[index].upos for index in ordered)
+    except IndexError as exc:
+        raise ManifestError(
+            f"MWE span is outside sentence {sentence.sentence_id!r}"
+        ) from exc
+    return tags in accepted
+
+
+def _validate_gold_shape(
+    specification: Mapping[str, object], sentences: tuple[Sentence, ...]
+) -> None:
+    observed = {
+        "expected_documents": len({sentence.document_id for sentence in sentences}),
+        "expected_sentences": len(sentences),
+        "expected_tokens": sum(len(sentence.tokens) for sentence in sentences),
+    }
+    for field, count in observed.items():
+        if field in specification and count != _int(specification[field], field):
+            raise ManifestError(
+                f"gold shape {field.removeprefix('expected_')} {count} "
+                f"!= frozen {specification[field]}"
+            )
 
 
 def _read_streusle(

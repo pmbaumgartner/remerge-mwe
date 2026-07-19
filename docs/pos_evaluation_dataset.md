@@ -54,6 +54,7 @@ them under one untracked directory as follows:
 ```text
 <acquisition-root>/ud-ewt/en_ewt-ud-{train,dev,test}.conllu
 <acquisition-root>/ud-ewt/LICENSE.txt
+<acquisition-root>/streusle/dev/streusle.ud_dev.conllulex
 <acquisition-root>/streusle/test/streusle.ud_test.conllulex
 <acquisition-root>/streusle/LICENSE.txt
 ```
@@ -62,12 +63,16 @@ Then the protected harness calls:
 
 ```python
 from pathlib import Path
-from tests.pos.evaluation.loader import load_final_gold, load_manifest, validate_acquired_dataset
+from tests.pos.evaluation.loader import load_gold_split, load_manifest, validate_acquired_dataset
 
 evidence = validate_acquired_dataset(load_manifest(), Path("<acquisition-root>"))
-gold = load_final_gold(load_manifest(), Path("<acquisition-root>"), allow_final=True)
+gold = load_gold_split(
+    load_manifest(), Path("<acquisition-root>"), "final", allow_final=True
+)
 ```
 
+The same typed `load_gold_split(..., split="dev"|"final")` path owns POS/MWE
+parsing, token alignment, span selection, checksums, and frozen aggregate shape.
 The loader has no download path. It rejects a missing file, hash mismatch,
 invalid canonical token, count mismatch, document or normalized-sentence split
 overlap, insufficient OOV/ambiguous/domain coverage, STREUSLE/EWT token

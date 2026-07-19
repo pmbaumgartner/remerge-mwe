@@ -64,7 +64,7 @@ patterns: `ADJ NOUN`, `NOUN NOUN`, `VERB NOUN`, and `VERB PART`.
 The reproducible command shape is:
 
 ```console
-python bin/evaluate-pos-selected-user.py ACQUISITION_ROOT \
+python -m tests.pos.evaluation.selected_user ACQUISITION_ROOT \
   --artifact-sha256 d195e97f2dcb4c3a1faebdc7a79094be8b4a84e034f257e3f2bbddaa1bd58dc8 \
   --source-revision 74934fd200e2fdab9d8d343c8a05c40e089b7d9b \
   --selected-user Peter --output EVIDENCE.json

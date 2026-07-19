@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 
 from tests.pos.evaluation.loader import (
     ManifestError,
+    load_gold_split,
     load_manifest,
     load_tagged_split,
     read_conllu,
@@ -49,6 +51,77 @@ def test_manifest_rejects_an_unapproved_release_dataset() -> None:
 def test_final_split_requires_explicit_protected_harness_authorization() -> None:
     with pytest.raises(ManifestError, match="protected-harness authorization"):
         load_tagged_split(load_manifest(), Path("not-used"), "final")
+
+    with pytest.raises(ManifestError, match="protected-harness authorization"):
+        load_gold_split(load_manifest(), Path("not-used"), "final")
+
+
+def test_gold_loader_owns_dev_alignment_span_policy_and_shape(
+    tmp_path: Path,
+) -> None:
+    manifest: dict[str, Any] = json.loads(json.dumps(load_manifest()))
+    ud_root = tmp_path / "ud-ewt"
+    streusle_root = tmp_path / "streusle" / "dev"
+    ud_root.mkdir()
+    streusle_root.mkdir(parents=True)
+    train = ud_root / "train.conllu"
+    dev = ud_root / "dev.conllu"
+    mwe = streusle_root / "streusle.ud_dev.conllulex"
+    train.write_text(_conllu("train-1", "train-1-1", (("base", "NOUN"),)))
+    dev.write_text(
+        _conllu("reviews-1", "reviews-1-1", (("good", "ADJ"), ("work", "NOUN")))
+    )
+    mwe.write_text(
+        "# sent_id = reviews-1-1\n"
+        "1\tgood\tgood\tADJ\t_\t_\t0\troot\t_\t_\t1:1\n"
+        "2\twork\twork\tNOUN\t_\t_\t1\tobj\t_\t_\t1:2\n\n",
+        encoding="utf-8",
+    )
+    manifest["splits"]["train"].update(
+        path="train.conllu",
+        sha256=_file_sha256(train),
+        expected_source_tokens=1,
+        expected_tokens=1,
+    )
+    manifest["splits"]["dev"].update(
+        path="dev.conllu",
+        sha256=_file_sha256(dev),
+        expected_source_tokens=2,
+        expected_tokens=2,
+    )
+    dev_gold = manifest["mwe_gold"]["splits"]["dev"]
+    dev_gold.update(
+        sha256=_file_sha256(mwe),
+        minimum_in_scope_spans=1,
+        expected_spans=1,
+        expected_documents=1,
+        expected_sentences=1,
+        expected_tokens=2,
+    )
+
+    gold = load_gold_split(manifest, tmp_path, "dev")
+
+    assert gold.split == "dev"
+    assert [(token.form, token.upos) for token in gold.sentences[0].tokens] == [
+        ("good", "ADJ"),
+        ("work", "NOUN"),
+    ]
+    assert {(span.start_token, span.end_token) for span in gold.mwe_spans} == {(0, 2)}
+
+
+def _conllu(
+    document_id: str, sentence_id: str, tokens: tuple[tuple[str, str], ...]
+) -> str:
+    rows = [f"# newdoc id = {document_id}", f"# sent_id = {sentence_id}"]
+    rows.extend(
+        f"{index}\t{form}\t{form}\t{upos}\t_\t_\t0\troot\t_\t_"
+        for index, (form, upos) in enumerate(tokens, start=1)
+    )
+    return "\n".join(rows) + "\n\n"
+
+
+def _file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def test_conllu_reader_preserves_integer_words_and_rejects_non_nfc(
