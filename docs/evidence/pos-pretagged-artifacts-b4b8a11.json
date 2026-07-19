@@ -1,0 +1,32 @@
+{
+  "artifacts": {
+    "direct_wheel": {
+      "members": 9,
+      "sha256": "04f6488d1a009c5682cf451c14dad5b8350f799a40c27607ca6fc4cc239bf973",
+      "smoke_passed": true
+    },
+    "sdist": {
+      "members": 21,
+      "sha256": "e37a8dbaedec52c6615a66590b3f4b43cc667487c34f4ec9b30f325ebfb0a9a2",
+      "smoke_passed_after_rebuild": true
+    },
+    "sdist_rebuilt_wheel": {
+      "members": 9,
+      "sha256": "cb6bdc20f5747666c8707502a3d9a1133118e0c8bc109de87d3527b4565d1b8f",
+      "smoke_passed": true
+    }
+  },
+  "audit": {
+    "forbidden_corpus_or_model_data": false,
+    "linear_pos_model_exposed": false,
+    "runtime_requires_dist": [],
+    "sdist_allowlist_passed": true,
+    "source_smoke_passed": true,
+    "wheel_license": "MIT",
+    "wheel_namespace_allowlist_passed": true
+  },
+  "build_command": "uv build --wheel --sdist --no-sources --clear --out-dir <fresh-directory>",
+  "schema_version": 1,
+  "source_revision": "b4b8a11c2e88aad9305c1f4e6af2f986945d616e",
+  "status": "accepted"
+}

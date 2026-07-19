@@ -1,0 +1,105 @@
+{
+  "command": "OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 NUMEXPR_NUM_THREADS=1 REMERGE_POS_BENCHMARK_POWER_MODE=AC REMERGE_POS_SOURCE_REVISION=b4b8a11c2e88aad9305c1f4e6af2f986945d616e REMERGE_POS_PRETAGGED_BENCHMARK=1 uv run --no-sync pytest -q tests/performance/test_pos_pretagged_release.py -m performance --pos-pretagged-evidence=<output> --pos-pretagged-core-baseline-evidence=docs/evidence/pos-pretagged-core-baseline-a26662f.json",
+  "filtering": {
+    "durations_seconds": [
+      0.10625150008127093,
+      0.10257404204457998,
+      0.10215966682881117,
+      0.11621845792979002,
+      0.10087783285416663,
+      0.10371970804408193,
+      0.11584550002589822,
+      0.10187275009229779,
+      0.1012335829436779,
+      0.11114470893517137,
+      0.0981482919305563,
+      0.0992708329576999,
+      0.11080058291554451,
+      0.10014062491245568,
+      0.10136008402332664
+    ],
+    "iqr_over_median": 0.09712982010802192,
+    "median_seconds": 0.10215966682881117,
+    "p95_seconds": 0.11621845792979002
+  },
+  "filtering_tokens_per_second": 978859.8877047033,
+  "fixture_sha256": "63d91f8a7316d36c2e8006102bafc36a19049d54b5bd3ecf432d7aeb2cd61427",
+  "frozen_pre_pos_baseline": {
+    "source_revision": "a26662fa5d7ede6f04cadc370ac55d5a9084e695",
+    "unfiltered_core_tokens_per_second": 3480470.2004369833
+  },
+  "generated_at_unix": 1784497643.251124,
+  "machine": {
+    "compiler": "Clang 16.0.3 ",
+    "cpu_count": 8,
+    "machine": "arm64",
+    "platform": "macOS-14.5-arm64-arm-64bit",
+    "power_mode": "AC",
+    "processor": "arm",
+    "python": "3.12.0 (main, Oct  2 2023, 20:56:14) [Clang 16.0.3 ]"
+  },
+  "protected_final_evaluated": false,
+  "protocol": {
+    "maximum_iqr_over_median": 0.1,
+    "maximum_unfiltered_core_regression": 0.05,
+    "measured_repetitions": 15,
+    "minimum_filtering_tokens_per_second": 100000,
+    "single_thread_required": true,
+    "warmups": 3
+  },
+  "schema_version": 1,
+  "source_revision": "b4b8a11c2e88aad9305c1f4e6af2f986945d616e",
+  "status": "accepted",
+  "unfiltered_core": {
+    "durations_seconds": [
+      0.02908108406700194,
+      0.02750604087486863,
+      0.028853582916781306,
+      0.027903292095288634,
+      0.027492624940350652,
+      0.028849040856584907,
+      0.028518375009298325,
+      0.028528125025331974,
+      0.02851654216647148,
+      0.028415167005732656,
+      0.029402458108961582,
+      0.028239334002137184,
+      0.029094541911035776,
+      0.028118666959926486,
+      0.027626083930954337
+    ],
+    "iqr_over_median": 0.03332419533704836,
+    "median_seconds": 0.02851654216647148,
+    "p95_seconds": 0.029402458108961582
+  },
+  "unfiltered_core_tokens_per_second": 3506736.5256358352,
+  "utility": {
+    "generated_overlap_with_unfiltered": 400,
+    "precision_generated": 1.0,
+    "precision_improvement_interval": {
+      "lower": 0.5,
+      "upper": 0.5
+    },
+    "precision_unfiltered": 0.5,
+    "recall_generated": 1.0,
+    "recall_gold_filtered": 1.0,
+    "recall_loss_gold_interval": {
+      "lower": 0.0,
+      "upper": 0.0
+    },
+    "recall_loss_unfiltered_interval": {
+      "lower": 0.0,
+      "upper": 0.0
+    },
+    "recall_unfiltered": 1.0,
+    "unfiltered_count": 800
+  },
+  "winner_signature": [
+    [
+      "bright",
+      "river"
+    ],
+    12500.0,
+    12500
+  ]
+}
