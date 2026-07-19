@@ -18,6 +18,7 @@ include = [
     "/rust/src/lexeme_store.rs",
     "/rust/src/lib.rs",
     "/rust/src/pos/annotations.rs",
+    "/rust/src/pos/candidates.rs",
     "/rust/src/pos/filter.rs",
     "/rust/src/pos/mod.rs",
     "/rust/src/py_bindings.rs",
