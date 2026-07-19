@@ -6,6 +6,7 @@ use crate::engine::{
 use crate::interner::{validate_token_vocabulary_size, Interner};
 use crate::lexeme_data::LexemeData;
 use crate::lexeme_store::{Lexeme, LexemeStore};
+use crate::scoring::scores_close;
 use crate::types::{SelectionMethod, Splitter, DEFAULT_RESCORE_INTERVAL};
 use proptest::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -238,24 +239,31 @@ fn min_score_blocks_low_score_winner() {
 
 #[test]
 fn rescore_interval_one_forces_full_rescore_every_step() {
-    let mut engine = build_engine(vec!["a b a c a b"], SelectionMethod::Npmi, 0, 1);
+    let mut engine = build_engine(
+        vec!["a b a c a b a c", "a b d c a b d c"],
+        SelectionMethod::Npmi,
+        0,
+        1,
+    );
 
-    let initial_count = engine.bigrams.bigrams_to_freqs.len();
-    assert_eq!(engine.candidate_scores.len(), initial_count);
+    for _ in 0..3 {
+        let StepStatus::Winner(_) = engine.step_internal(None) else {
+            panic!("expected winner");
+        };
 
-    let StepStatus::Winner(_) = engine.step_internal(None) else {
-        panic!("expected winner");
-    };
+        engine.refresh_candidate_state(false);
+        let interval_scores = engine.candidate_scores.clone();
 
-    engine.refresh_candidate_state(false);
-
-    let eligible = engine
-        .bigrams
-        .bigrams_to_freqs
-        .iter()
-        .filter(|(_, freq)| **freq >= engine.min_count)
-        .count();
-    assert_eq!(engine.candidate_scores.len(), eligible);
+        engine.refresh_candidate_state(true);
+        assert_eq!(interval_scores.len(), engine.candidate_scores.len());
+        for (bigram, expected) in &engine.candidate_scores {
+            let actual = interval_scores
+                .get(bigram)
+                .expect("interval rescore omitted an eligible candidate");
+            assert_eq!(actual.frequency, expected.frequency);
+            assert!(scores_close(actual.score, expected.score));
+        }
+    }
 }
 
 #[test]

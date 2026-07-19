@@ -1,10 +1,8 @@
 from hypothesis import HealthCheck, given, settings, strategies as st
-import pytest
 
 from remerge import run
 
 
-@pytest.mark.fast
 @settings(
     max_examples=50,
     deadline=None,
@@ -20,8 +18,12 @@ from remerge import run
 )
 def test_run_property_invariants(corpus, iterations):
     winners = run(corpus, iterations, method="frequency")
+    repeated = run(corpus, iterations, method="frequency")
+    source_tokens = {token for document in corpus for token in document.split()}
 
+    assert winners == repeated
     assert len(winners) <= iterations
     for winner in winners:
         assert len(winner.merged_lexeme.word) >= 2
+        assert set(winner.merged_lexeme.word) <= source_tokens
         assert winner.merge_token_count >= 1

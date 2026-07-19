@@ -151,17 +151,20 @@ This project uses `uv`, `ruff`, and `ty`.
 # Sync environment
 uv sync --all-groups
 
+# Install the commit hook once per clone
+uv run --no-sync prek install
+
 # Build/install Rust extension into the active env
 uv run --no-sync maturin develop
 
-# Python checks
-uv run ruff format src tests
-uv run ruff check src tests
-uv run ty check src tests
-uv run --no-sync pytest -v -m "not corpus and not parity"
+# Formatting, linting, typing, and Clippy checks
+uv run --no-sync prek run --all-files
 
-# Slower corpus/parity suite
-uv run --no-sync pytest -v -m "corpus or parity"
+# Python tests
+uv run --no-sync pytest -v -m "not performance"
+
+# Opt-in reference-corpus performance guard
+REMERGE_PERF_GUARD=1 uv run --no-sync pytest -q tests/performance/test_runtime.py
 ```
 
 If you change files under `rust/`, rebuild the extension before running Python tests:

@@ -4,12 +4,10 @@ on:
   pull_request:
 
 jobs:
-  fast-test:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -21,10 +19,10 @@ jobs:
           path: ~/.cache/uv
           key: uv-${{ runner.os }}-py312-${{ hashFiles('**/uv.lock') }}
       - run: uv sync --all-groups --frozen
+      - run: uv run --no-sync prek run --all-files
       - run: cargo check
       - run: cargo fmt --all -- --check
       - run: cargo test
-      - run: cargo clippy --all-targets -- -D warnings
       - run: uv run --with maturin maturin develop
       - run: uv run --no-sync pytest -q tests/test_smoke.py
       - run: uv build --wheel --no-sources
@@ -34,16 +32,16 @@ jobs:
           pip install --upgrade pip
           pip install dist/remerge_mwe-*.whl
           python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency')[0].merged_lexeme.word == ('a', 'b')"
-      - run: uv run --no-sync pytest -v -m "not corpus and not parity" --cov=src/remerge --cov-report=term-missing --cov-report=xml --cov-fail-under=95
+      - run: uv run --no-sync pytest -v -m "not performance" --cov=src/remerge --cov-report=term-missing --cov-report=xml --cov-fail-under=95
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: error
 
-  full-corpus:
+  performance:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: fast-test
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,5 +59,4 @@ jobs:
           key: uv-${{ runner.os }}-py312-${{ hashFiles('**/uv.lock') }}
       - run: uv sync --all-groups --frozen
       - run: uv run --with maturin maturin develop
-      - run: uv run --no-sync pytest -v -m "corpus or parity"
-      - run: REMERGE_PERF_GUARD=1 REMERGE_PERF_ITERATIONS=5 REMERGE_PERF_MAX_SECONDS=25.0 uv run --no-sync pytest -q tests/test_performance_guard.py
+      - run: REMERGE_PERF_GUARD=1 REMERGE_PERF_ITERATIONS=5 REMERGE_PERF_MAX_SECONDS=25.0 uv run --no-sync pytest -q tests/performance/test_runtime.py

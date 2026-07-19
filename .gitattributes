@@ -1,1 +1,1 @@
-tests/sample_corpus/* filter=lfs diff=lfs merge=lfs -text
+tests/performance/reference_corpus/*.TXT filter=lfs diff=lfs merge=lfs -text

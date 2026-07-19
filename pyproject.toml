@@ -10,6 +10,7 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "prek>=0.4.10,<1",
     "pytest>=7.1.3",
     "pytest-benchmark>=4.0.0",
     "ruff>=0.9,<1",
@@ -33,7 +34,5 @@ build-backend = "maturin"
 
 [tool.pytest.ini_options]
 markers = [
-    "fast: quick, small-corpus tests for local iteration",
-    "corpus: tests that exercise the bundled sample corpus",
-    "parity: full-corpus regression parity checks (slow)",
+    "performance: opt-in runtime checks over the reference corpus",
 ]
