@@ -1,6 +1,7 @@
 use crate::bigram_data::BigramId;
 use crate::types::{SelectionMethod, PARALLEL_SCORE_THRESHOLD, SCORE_ATOL, SCORE_RTOL, SMALL};
 use rayon::prelude::*;
+use std::cmp::Ordering;
 
 #[derive(Clone, Copy)]
 pub(crate) struct CandidateScore {
@@ -14,6 +15,25 @@ pub(crate) struct CandidateStats {
     pub(crate) freq: Option<i64>,
     pub(crate) left_freq: i64,
     pub(crate) right_freq: i64,
+}
+
+pub(crate) struct CandidateRank<'a, M: ?Sized, I: ?Sized> {
+    pub(crate) score: f64,
+    pub(crate) frequency: i64,
+    pub(crate) merged: &'a M,
+    pub(crate) identity: &'a I,
+}
+
+pub(crate) fn compare_candidate_rank<M: Ord + ?Sized, I: Ord + ?Sized>(
+    candidate: CandidateRank<'_, M, I>,
+    other: CandidateRank<'_, M, I>,
+) -> Ordering {
+    candidate
+        .score
+        .total_cmp(&other.score)
+        .then_with(|| candidate.frequency.cmp(&other.frequency))
+        .then_with(|| other.merged.cmp(candidate.merged))
+        .then_with(|| candidate.identity.cmp(other.identity))
 }
 
 fn safe_ll_term(observed: f64, expected: f64) -> f64 {

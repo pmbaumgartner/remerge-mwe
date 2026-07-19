@@ -6,6 +6,8 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+import statistics
+from time import perf_counter
 from time import time
 from typing import Any
 
@@ -35,6 +37,11 @@ REFERENCE_WORKLOAD_SHA256 = (
 )
 REFERENCE_WINNER_SIGNATURE = [["bright", "river"], 12_500.0, 12_500]
 PATTERNS: list[remerge.PosPattern] = [("ADJ", "NOUN")]
+SCALING_PATTERNS: list[remerge.PosPattern] = [
+    ("ADJ", "NOUN"),
+    ("ADV", "VERB"),
+    ("ADJ", "NOUN", "ADV"),
+]
 
 
 def _sentence(*items: tuple[str, str]) -> tuple[remerge.TaggedToken, ...]:
@@ -65,6 +72,57 @@ def _supplied_documents(
     documents: tuple[GoldDocument, ...],
 ) -> list[remerge.TaggedDocument]:
     return [remerge.TaggedDocument(document.sentences) for document in documents]
+
+
+def _varied_scaling_documents() -> list[remerge.TaggedDocument]:
+    sentences: list[tuple[remerge.TaggedToken, ...]] = []
+    for sentence_index in range(5_000):
+        variant = sentence_index % 64
+        tokens: list[remerge.TaggedToken] = []
+        for group in range(5):
+            identity = f"{variant}-{group}"
+            tokens.extend(
+                _sentence(
+                    (f"bright-{identity}", "ADJ"),
+                    (f"river-{identity}", "NOUN"),
+                    (f"swiftly-{identity}", "ADV"),
+                    (f"opens-{identity}", "VERB"),
+                )
+            )
+        sentences.append(tuple(tokens))
+    return [
+        remerge.TaggedDocument(tuple(sentences[offset : offset + 50]))
+        for offset in range(0, len(sentences), 50)
+    ]
+
+
+def _multiwinner_scaling() -> list[dict[str, float | int]]:
+    documents = _varied_scaling_documents()
+    measurements: list[dict[str, float | int]] = []
+    for iterations in (1, 8, 32):
+        durations = []
+        for _ in range(3):
+            started = perf_counter()
+            winners = remerge.run_tagged(
+                documents,
+                iterations,
+                patterns=SCALING_PATTERNS,
+                method="frequency",
+                min_count=1,
+            )
+            durations.append(perf_counter() - started)
+            assert len(winners) == iterations
+        measurements.append(
+            {
+                "requested_winners": iterations,
+                "median_seconds": statistics.median(durations),
+            }
+        )
+    if measurements[2]["median_seconds"] > 6 * measurements[1]["median_seconds"]:
+        raise AssertionError(
+            "32-winner POS filtering scales superlinearly relative to 8 winners"
+        )
+    return measurements
 
 
 def _utility_metrics(*, resamples: int = 1_001) -> UtilityMetrics:
@@ -210,6 +268,7 @@ def test_pretagged_release_benchmark(pytestconfig: pytest.Config) -> None:
 
         filtering_rate = REFERENCE_WORKLOAD_TOKENS / filtering.median_seconds
         core_rate = REFERENCE_WORKLOAD_TOKENS / discovery.median_seconds
+        multiwinner_scaling = _multiwinner_scaling()
         evidence.update(
             {
                 "fixture_sha256": fixture_sha256,
@@ -219,6 +278,7 @@ def test_pretagged_release_benchmark(pytestconfig: pytest.Config) -> None:
                 "unfiltered_core": asdict(discovery),
                 "filtering_tokens_per_second": filtering_rate,
                 "unfiltered_core_tokens_per_second": core_rate,
+                "multiwinner_scaling": multiwinner_scaling,
             }
         )
         failures: list[str] = []

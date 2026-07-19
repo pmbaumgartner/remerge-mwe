@@ -270,3 +270,24 @@ def test_unfiltered_diagnostic_reports_exact_occurrence_coordinates() -> None:
         remerge.MweOccurrence(0, 0, 2, 4),
         remerge.MweOccurrence(2, 0, 0, 2),
     )
+
+
+def test_filtered_and_unfiltered_ties_share_lexical_ranking() -> None:
+    raw = ["z a\nb c"]
+    tagged = [
+        document(
+            (token("z", "NOUN"), token("a", "NOUN")),
+            (token("b", "NOUN"), token("c", "NOUN")),
+        )
+    ]
+
+    assert remerge.run(raw, 1, method="frequency")[0].text == "b c"
+    assert (
+        remerge.run_tagged(
+            tagged,
+            1,
+            patterns=[("*", "*")],
+            method="frequency",
+        )[0].text
+        == "b c"
+    )

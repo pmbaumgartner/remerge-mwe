@@ -3,7 +3,10 @@ use crate::interner::Interner;
 use crate::lexeme_data::LexemeData;
 use crate::lexeme_store::{Lexeme, LexemeStore};
 use crate::py_bindings::{RunOutcome, StepResult};
-use crate::scoring::{compute_scores, scores_close, CandidateScore, CandidateStats};
+use crate::scoring::{
+    compare_candidate_rank, compute_scores, scores_close, CandidateRank, CandidateScore,
+    CandidateStats,
+};
 use crate::types::{LexemeId, Location, RunStatus, SelectionMethod, TokenId};
 use pyo3::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -59,11 +62,20 @@ impl PartialOrd for HeapEntry {
 
 impl Ord for HeapEntry {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.score
-            .total_cmp(&other.score)
-            .then_with(|| self.frequency.cmp(&other.frequency))
-            .then_with(|| other.merged_word.cmp(&self.merged_word))
-            .then_with(|| self.bigram.cmp(&other.bigram))
+        compare_candidate_rank(
+            CandidateRank {
+                score: self.score,
+                frequency: self.frequency,
+                merged: &self.merged_word,
+                identity: &self.bigram,
+            },
+            CandidateRank {
+                score: other.score,
+                frequency: other.frequency,
+                merged: &other.merged_word,
+                identity: &other.bigram,
+            },
+        )
     }
 }
 
