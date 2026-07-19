@@ -45,11 +45,12 @@ class BenchmarkTagger:
 ```
 
 `tag()` receives fixed document/sentence/token boundaries and must return the
-same forms and nesting, with `source="builtin"` and its exact `model_id`.
+same forms and nesting. Its exact model and tokenizer identities live in the
+candidate-registration and benchmark evidence objects, not discovery input.
 `tag_text()` is used only for raw-text end-to-end timing and must reproduce the
 same frozen boundaries. Any changed document count, sentence boundary, token
-boundary, form, UPOS value, or model identity rejects the run. The harness
-does not re-tokenize or repair a result.
+boundary, form, or UPOS value rejects the run. The harness does not re-tokenize
+or repair a result.
 
 ## Required inputs before final evaluation
 

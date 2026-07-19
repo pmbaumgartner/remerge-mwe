@@ -171,20 +171,13 @@ def test_tagged_input_and_pattern_validation(
         remerge.run_tagged(corpus, 1, patterns=patterns)
 
 
-def test_empty_document_round_trips_and_builtin_metadata_is_strict() -> None:
+def test_empty_document_round_trips() -> None:
     empty = remerge.TaggedDocument(sentences=())
     assert remerge.annotate_tagged([empty], 0, patterns=[("NOUN", "NOUN")]) == (
         [],
         [""],
         [],
     )
-
-    builtin_without_identity = remerge.TaggedDocument(
-        sentences=((token("a", "NOUN"), token("b", "NOUN")),),
-        source="builtin",
-    )
-    with pytest.raises(ValueError, match="model_id is required"):
-        remerge.run_tagged([builtin_without_identity], 1, patterns=[("NOUN", "NOUN")])
 
 
 def test_strict_conllu_adapter_keeps_word_rows_and_boundaries() -> None:

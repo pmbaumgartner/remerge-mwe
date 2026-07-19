@@ -6,19 +6,19 @@ created: 2026-07-19
 # POS annotation and token-alignment contract
 
 **Decision:** Adopt a public, sentence-nested annotated-token input
-as the canonical POS representation, with a strict CoNLL-U adapter and a
-separate raw-text built-in-tagger convenience path.
+as the canonical supplied-POS representation, with a strict CoNLL-U adapter.
+The later pretagged-only outcome retired the proposed generated-tag path before
+stable release.
 
 **Why now / higher-level goal:** `bdxy` must add occurrence-level English
 UPOS filtering without changing existing unfiltered behavior or allowing a
 tagger's tokenization to diverge from the discovery engine. This contract is
 the shared boundary for the pretagged pilot (`npak`), quality oracle (`e6wr`),
-and every candidate built-in tagger.
+and the retained research evaluators.
 
 **Goal check:** The proposed contract preserves the current raw-string API as
-is. It adds opt-in behavior only, keeps tags on token *occurrences* rather
-than interned token IDs, and gives a built-in tagger one tokenization pass to
-share with the engine.
+is. It adds opt-in behavior only and keeps tags on token *occurrences* rather
+than interned token IDs.
 
 **Consequential:** Yes — the selected shape becomes a public API, fixes the
 training/inference boundary, and constrains all downstream implementations and
@@ -59,8 +59,8 @@ evaluation.
    tags apply, including punctuation and contractions.
 2. The representation permits distinct tags for equal token strings at distinct
    occurrences.
-3. The representation is usable unchanged by pretagged input and generated
-   tags, and can be converted to the engine without a second tokenizer pass.
+3. The supplied representation converts to the engine without a second
+   tokenizer pass.
 4. A malformed, mismatched, unknown, or unreproducible annotation fails at the
    boundary rather than changing POS semantics silently.
 5. Existing `run()` and `annotate()` calls retain their current raw-string and
@@ -84,9 +84,7 @@ retokenization.
 
 Add a `TaggedDocument` representation of explicit, non-empty sentences of
 `TaggedToken(form, upos)`. A pretagged discovery entry point accepts only this
-representation. A separate CoNLL-U adapter converts corpus files to it. The
-built-in tagger's raw-text convenience entry point first creates the same
-representation, then gives its token vectors directly to the engine.
+representation. A separate CoNLL-U adapter converts corpus files to it.
 
 This adds a small public type but makes every boundary explicit, makes
 alignment validation local and deterministic, and gives training/evaluation a
@@ -120,8 +118,6 @@ class TaggedToken:
 class TaggedDocument:
     sentences: tuple[tuple[TaggedToken, ...], ...]
     language: str = "en"
-    source: Literal["supplied", "builtin"] = "supplied"
-    model_id: str | None = None
 ```
 
 `sentences` is the canonical occurrence order. A token occurrence is identified
@@ -158,11 +154,6 @@ and risk interpreting a sequence of strings as the wrong representation.
   existing `splitter`, `line_delimiter`, and `sentencex_language` parameters
   are invalid on that entry point rather than silently ignored. No candidate
   may cross a supplied sentence boundary.
-- For raw input with a built-in tagger, sentence segmentation is part of that
-  tagger's documented preprocessing profile. The profile must name its
-  segmenter and version, language (`"en"` in v1), and tokenization rules; it
-  yields `TaggedDocument` before engine construction. The tagger and engine
-  share those tokens and boundaries exactly.
 - Existing non-POS calls retain their existing splitter behavior unchanged.
 
 ### 4. CoNLL-U conversion
@@ -182,17 +173,16 @@ per blank-line-delimited CoNLL-U sentence.
   diagnostics only; v1 neither aligns a raw document against them nor uses
   them to detokenize.
 - Reject an invalid row or sentence; do not repair, re-tokenize, or pad it.
-  This is deliberate: any raw text intended for built-in tagging must first
-  pass through that model's frozen tokenizer instead.
+  This is deliberate: callers must align supplied tags before discovery.
 
 ### 5. Metadata, confidence, and reproducibility
 
 - Every tagged document records `language="en"` in v1. Other languages are
   rejected at the public boundary.
-- `source="supplied"` may include an optional caller-provided `model_id` as
-  provenance. `source="builtin"` requires a non-empty immutable identity
-  containing the model artifact version/content digest and preprocessing
-  profile version. The result/diagnostic metadata must expose this identity.
+- The discovery input carries no generated-tagger mode or model identity.
+  Research evaluators keep candidate and tokenizer identities in their own
+  evidence records. Adding generated tags to the public contract requires a
+  new outcome and contract decision.
 - Public per-token confidence is **not in v1**. Internally produced confidence
   may be retained for evaluation, but it must not become a public value until
   `e6wr` approves a calibration metric, dataset, and maximum error.
@@ -204,9 +194,7 @@ per blank-line-delimited CoNLL-U sentence.
   document/sentence/token coordinate and field; there is no truncation,
   broadcasting, fallback tag, or implicit retokenization.
 - The implementation creates the interner and occurrence annotations from the
-  validated token vectors. The raw built-in pipeline must produce those vectors
-  once and pass them to the engine. It must not tokenize raw text for tagging
-  and then call the legacy raw-string constructor for discovery.
+  validated token vectors.
 - The unfiltered raw path must not load a model, invoke the POS tokenizer, or
   acquire POS-specific memory unless POS behavior was explicitly selected.
 

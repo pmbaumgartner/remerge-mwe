@@ -71,8 +71,6 @@ def _rotated_predictions(documents):
                 )
                 for sentence in document.sentences
             ),
-            source="builtin",
-            model_id="rotated-control",
         )
         for document in documents
     )
@@ -83,12 +81,8 @@ def test_project_owned_quality_metric_split_and_alignment_sensors() -> None:
 
     training_documents = project_authored_training_documents()
     gold_documents = project_authored_gold_documents()
-    known_good = canonical_documents(gold_documents, model_id="known-good-control")
-    checked = validate_tagger_output(
-        gold_documents,
-        known_good,
-        expected_model_id="known-good-control",
-    )
+    known_good = canonical_documents(gold_documents)
+    checked = validate_tagger_output(gold_documents, known_good)
     metrics = calculate_quality_metrics(
         training_documents,
         gold_documents,
@@ -322,7 +316,6 @@ def _raw_to_filtered(
     tagged = validate_tagger_output(
         workload,
         tagger.tag_text(raw_documents(workload)),
-        expected_model_id=tagger.model_id,
     )
     winners = remerge.run_tagged(
         list(tagged), 1, patterns=patterns, method="frequency", min_count=1
@@ -394,7 +387,6 @@ def test_pos_tagger_release_benchmark(pytestconfig: pytest.Config) -> None:
         tagged_final = validate_tagger_output(
             final,
             tagger.tag(input_boundaries(final)),
-            expected_model_id=tagger.model_id,
         )
         quality = calculate_quality_metrics(training, final, tagged_final)
         intervals = document_bootstrap_intervals(training, final, tagged_final)
@@ -450,7 +442,7 @@ def test_pos_tagger_release_benchmark(pytestconfig: pytest.Config) -> None:
             on_exhausted=on_exhausted,
         )
         gold_winners = remerge.run_tagged(
-            list(canonical_documents(final, model_id="gold-final")),
+            list(canonical_documents(final)),
             iterations,
             patterns=patterns,
             method=method,
@@ -493,7 +485,6 @@ def test_pos_tagger_release_benchmark(pytestconfig: pytest.Config) -> None:
         tagged_reference = validate_tagger_output(
             reference,
             tagger.tag(input_boundaries(reference)),
-            expected_model_id=tagger.model_id,
         )
         inference = timed_measurement(lambda: tagger.tag(input_boundaries(reference)))
         filtering = timed_measurement(

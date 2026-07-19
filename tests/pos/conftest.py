@@ -242,15 +242,10 @@ def project_authored_training_documents() -> tuple[GoldDocument, ...]:
 
 
 def canonical_documents(
-    documents: Sequence[GoldDocument], *, model_id: str = "control"
+    documents: Sequence[GoldDocument],
 ) -> tuple[remerge.TaggedDocument, ...]:
     return tuple(
-        remerge.TaggedDocument(
-            sentences=document.sentences,
-            source="builtin",
-            model_id=model_id,
-        )
-        for document in documents
+        remerge.TaggedDocument(sentences=document.sentences) for document in documents
     )
 
 
@@ -280,8 +275,6 @@ def raw_documents(documents: Sequence[GoldDocument]) -> tuple[str, ...]:
 def validate_tagger_output(
     documents: Sequence[GoldDocument],
     output: Sequence[remerge.TaggedDocument],
-    *,
-    expected_model_id: str,
 ) -> tuple[remerge.TaggedDocument, ...]:
     """Reject a tagger result that changes the frozen input alignment."""
 
@@ -293,10 +286,6 @@ def validate_tagger_output(
         if not isinstance(actual, remerge.TaggedDocument):
             raise AssertionError(
                 f"tagger output document {document_index} is not TaggedDocument"
-            )
-        if actual.source != "builtin" or actual.model_id != expected_model_id:
-            raise AssertionError(
-                f"tagger output document {document_index} has an invalid model identity"
             )
         if len(actual.sentences) != len(expected.sentences):
             raise AssertionError(

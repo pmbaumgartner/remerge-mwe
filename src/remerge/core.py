@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from enum import Enum
 import sys
-from typing import Literal, TypeAlias, TypeVar
+from typing import TypeAlias, TypeVar
 import unicodedata
 
 from ._core import (
@@ -67,8 +67,6 @@ class TaggedToken:
 class TaggedDocument:
     sentences: tuple[tuple[TaggedToken, ...], ...]
     language: str = "en"
-    source: Literal["supplied", "builtin"] = "supplied"
-    model_id: str | None = None
 
 
 PosPatternPosition: TypeAlias = str | frozenset[str]
@@ -368,20 +366,6 @@ def _validate_tagged_corpus(
             raise TypeError(f"corpus[{document_index}] must be a TaggedDocument.")
         if document.language != "en":
             raise ValueError(f"corpus[{document_index}].language must be 'en'.")
-        if document.source not in {"supplied", "builtin"}:
-            raise ValueError(
-                f"corpus[{document_index}].source must be 'supplied' or 'builtin'."
-            )
-        if document.model_id is not None and (
-            not isinstance(document.model_id, str) or not document.model_id.strip()
-        ):
-            raise ValueError(
-                f"corpus[{document_index}].model_id must be None or a non-empty string."
-            )
-        if document.source == "builtin" and document.model_id is None:
-            raise ValueError(
-                f"corpus[{document_index}].model_id is required for source='builtin'."
-            )
         if not isinstance(document.sentences, tuple):
             raise TypeError(f"corpus[{document_index}].sentences must be a tuple.")
 
