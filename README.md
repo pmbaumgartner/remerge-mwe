@@ -77,6 +77,54 @@ For long runs, set `progress=True` to print live merge progress to `stderr`:
 winners = remerge.run(corpus, 500, progress=True)
 ```
 
+## POS-constrained discovery from supplied tags
+
+`run_tagged()` and `annotate_tagged()` accept explicit sentence-nested UPOS
+annotations. This path does not load a tagger or retokenize text. Tags belong to
+token occurrences, so equal surface forms may have different tags.
+
+```python
+import remerge
+
+corpus = [
+    remerge.TaggedDocument(
+        sentences=((
+            remerge.TaggedToken("record", "VERB"),
+            remerge.TaggedToken("deal", "NOUN"),
+        ),),
+    )
+]
+
+winners = remerge.run_tagged(
+    corpus,
+    iterations=1,
+    patterns=[("VERB", "NOUN")],
+    method="frequency",
+)
+```
+
+A pattern position is an exact UPOS tag, `"*"`, or a `frozenset` of exact
+alternatives. Patterns contain at least two positions; a list of patterns is
+OR-ed. Filtering is occurrence-constrained: only matching occurrences affect
+candidate counts, scores, merges, results, and annotations. Proper subspans may
+merge internally to discover longer patterns, but those support merges are not
+returned and do not consume requested iterations.
+
+Tagged winners include exact original-token coordinates in
+`winner.occurrences`. Each `MweOccurrence` records document, sentence,
+start-token, and exclusive end-token indexes, so evaluation code need not infer
+spans from rendered strings.
+
+Use `remerge.from_conllu(text)` for strict CoNLL-U interchange. It retains
+integer-ID word rows, skips multiword-token range and empty-node rows, preserves
+punctuation and supplied sentence/document boundaries, and rejects malformed
+or non-NFC input rather than repairing alignment.
+
+Forms must be non-empty NFC strings without Unicode whitespace, and UPOS values
+must be one of the 17 Universal POS tags. Supplied sentence boundaries are
+authoritative. Tagged annotation output joins tokens with spaces and sentences
+with newlines.
+
 ## API - `remerge.run`
 
 | Argument | Type | Description |

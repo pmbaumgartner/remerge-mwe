@@ -3,6 +3,7 @@ use crate::engine::Engine;
 use crate::interner::Interner;
 use crate::lexeme_data::LexemeData;
 use crate::lexeme_store::LexemeStore;
+use crate::pos::filter::PosEngine;
 use crate::types::{RunStatus, SelectionMethod, Splitter, DEFAULT_RESCORE_INTERVAL};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -28,6 +29,14 @@ pub struct StepResult {
     pub(crate) merged_ix: usize,
     #[pyo3(get)]
     pub(crate) merge_token_count: usize,
+    #[pyo3(get)]
+    pub(crate) occurrence_documents: Vec<usize>,
+    #[pyo3(get)]
+    pub(crate) occurrence_sentences: Vec<usize>,
+    #[pyo3(get)]
+    pub(crate) occurrence_starts: Vec<usize>,
+    #[pyo3(get)]
+    pub(crate) occurrence_ends: Vec<usize>,
 }
 
 pub(crate) type RunOutcome = (u8, Vec<StepResult>, Option<f64>, usize);
@@ -40,7 +49,7 @@ pub(crate) type AnnotateRunOutcome = (
     Vec<String>,
 );
 
-fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
+pub(crate) fn panic_payload_to_string(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<&str>() {
         return (*message).to_string();
     }
@@ -178,6 +187,7 @@ impl Engine {
 #[pymodule(gil_used = true)]
 fn _core(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Engine>()?;
+    module.add_class::<PosEngine>()?;
     module.add_class::<StepResult>()?;
     module.add("STATUS_COMPLETED", RunStatus::Completed.code())?;
     module.add("STATUS_NO_CANDIDATE", RunStatus::NoCandidate.code())?;

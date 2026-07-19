@@ -19,6 +19,14 @@ class StepResult:
     def merged_ix(self) -> int: ...
     @property
     def merge_token_count(self) -> int: ...
+    @property
+    def occurrence_documents(self) -> list[int]: ...
+    @property
+    def occurrence_sentences(self) -> list[int]: ...
+    @property
+    def occurrence_starts(self) -> list[int]: ...
+    @property
+    def occurrence_ends(self) -> list[int]: ...
 
 RunOutcome = tuple[int, list[StepResult], float | None, int]
 AnnotateRunOutcome = tuple[
@@ -40,6 +48,29 @@ class Engine:
         line_delimiter: str | None = "\n",
         sentencex_language: str = "en",
         rescore_interval: int = 25,
+    ) -> None: ...
+    def corpus_length(self) -> int: ...
+    def run(
+        self,
+        iterations: int,
+        min_score: float | None = None,
+    ) -> RunOutcome: ...
+    def run_and_annotate(
+        self,
+        iterations: int,
+        min_score: float | None = None,
+        mwe_prefix: str = "<mwe:",
+        mwe_suffix: str = ">",
+        token_separator: str = "_",
+    ) -> AnnotateRunOutcome: ...
+
+class PosEngine:
+    def __init__(
+        self,
+        corpus: list[list[list[tuple[str, str]]]],
+        patterns: list[list[list[str]]],
+        method: str,
+        min_count: int,
     ) -> None: ...
     def corpus_length(self) -> int: ...
     def run(

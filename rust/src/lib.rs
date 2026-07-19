@@ -3,6 +3,7 @@ mod engine;
 mod interner;
 mod lexeme_data;
 mod lexeme_store;
+mod pos;
 mod py_bindings;
 mod scoring;
 mod types;

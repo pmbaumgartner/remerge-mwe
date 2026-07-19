@@ -625,6 +625,10 @@ impl Engine {
             merged_word: self.token_ids_to_strings(&merged.word),
             merged_ix: merged.ix,
             merge_token_count,
+            occurrence_documents: Vec::new(),
+            occurrence_sentences: Vec::new(),
+            occurrence_starts: Vec::new(),
+            occurrence_ends: Vec::new(),
         }
     }
 
