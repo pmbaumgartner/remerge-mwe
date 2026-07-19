@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "dataset_id": "ud-ewt-r2.10-streusle-v4.5",
+  "language": "en",
+  "release_adequate": true,
+  "canonical_unit": "(document_id, sentence_id, zero_based_word_index)",
+  "adapter": {
+    "name": "conllu-integer-word-v1",
+    "rule": "retain only integer-ID rows, preserving NFC FORM and exact UPOS; skip multiword-token and empty-node rows"
+  },
+  "sources": {
+    "ud_ewt": {
+      "relative_root": "ud-ewt",
+      "repository": "https://github.com/UniversalDependencies/UD_English-EWT.git",
+      "release_tag": "r2.10",
+      "revision": "b33472d3ce50a62056d6057f1b8a723e9d211176",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "license_sha256": "b3d1b0f4c6ae151f7eb78738f46ebd5ee140f8a7f76501ba26af123140d35ae7"
+    },
+    "streusle": {
+      "relative_root": "streusle",
+      "repository": "https://github.com/nert-nlp/streusle.git",
+      "release_tag": "v4.5",
+      "revision": "6c7855e717239e79321074765cc0f96dbcf72d1a",
+      "license": "CC BY-SA 4.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "license_sha256": "b3d1b0f4c6ae151f7eb78738f46ebd5ee140f8a7f76501ba26af123140d35ae7"
+    }
+  },
+  "splits": {
+    "train": {
+      "source": "ud_ewt",
+      "path": "en_ewt-ud-train.conllu",
+      "sha256": "e6a3784727e7726d4f1c2e10ff22dcd0ddeb8869ad6f85b73bb1ff5ef798e944",
+      "expected_source_tokens": 204578,
+      "expected_tokens": 199199
+    },
+    "dev": {
+      "source": "ud_ewt",
+      "path": "en_ewt-ud-dev.conllu",
+      "sha256": "ef962ac05d844eaff46eeded125937129bfc0876d43963d66810cb73ffa8f5df",
+      "expected_source_tokens": 25149,
+      "expected_tokens": 24822
+    },
+    "final": {
+      "source": "ud_ewt",
+      "path": "en_ewt-ud-test.conllu",
+      "sha256": "465100c5b6fb606725068dc70680d65cc047fbb4ae25195375618bc6353a4e58",
+      "expected_source_tokens": 25094,
+      "expected_tokens": 24575,
+      "minimum_tokens": 5000,
+      "minimum_oov_tokens": 500,
+      "minimum_ambiguous_tokens": 500,
+      "minimum_tokens_per_named_domain": 1000
+    }
+  },
+  "named_domains": {
+    "answers": 5278,
+    "email": 5761,
+    "newsgroup": 3695,
+    "reviews": 5347,
+    "weblog": 4494
+  },
+  "mwe_gold": {
+    "source": "streusle",
+    "path": "test/streusle.ud_test.conllulex",
+    "sha256": "1c518a55da556e83123d72317e6b7353bc73b6a37d85a89110116ca944c8c397",
+    "sentence_alignment": "STREUSLE v4.5 test sentence IDs and canonical integer-word (FORM, UPOS) sequences must exactly match UD EWT r2.10 final review sentences.",
+    "span_policy": "Use only contiguous, strong STREUSLE MWEs with at least two words. Exclude gappy and weak MWEs because the v1 discovery result is a contiguous occurrence span.",
+    "minimum_in_scope_spans": 200,
+    "expected_contiguous_strong_spans": 229,
+    "expected_unretained_sentences": 12
+  },
+  "filter_configuration": {
+    "patterns": [["ADJ", "NOUN"], ["NOUN", "NOUN"], ["VERB", "NOUN"], ["VERB", "PART"]],
+    "score_method": "ll",
+    "min_count": 2,
+    "min_score": 0.0,
+    "on_exhausted": "stop",
+    "requested_winners": 500
+  },
+  "protected_final": {
+    "policy": "Final raw text and gold labels are never committed to this repository or included in packages. A release evaluator receives a separate checksum-verified acquisition root and may invoke final loading only after candidate registration. Development and training code receives only train/dev paths.",
+    "candidate_registration_required": true,
+    "one_final_run_per_registered_candidate": true,
+    "refresh_authority": "Peter; record an explicit Kata decision before replacing any hash, split, source revision, annotation policy, or threshold."
+  }
+}
