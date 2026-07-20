@@ -153,6 +153,60 @@ metrics. Condition IDs include the fraction index as well as its value, so
 nearby fractions cannot overwrite one another. The command rejects more than
 30 repetitions rather than substituting an unsupported normal approximation.
 
+## Completed study evidence
+
+The attributable study completed from clean revision `ecfab38` in 47 minutes
+22 seconds with four workers. Its 724,546-byte report has SHA-256
+`69a208dcb8d202356ce7e6c0f7372a31e322046daea9f219327f8c1399dac965`.
+The report status is `completed`, all 80 condition artifacts have distinct
+digests, all 15 representative MWE evaluations ran, every evidence-integrity
+check passed, and `protected_final_evaluated` is `false`.
+
+The repeated learning curve was:
+
+| Gold fraction | Mean train tokens | Accuracy (95% t interval) | OOV accuracy | Ambiguous accuracy |
+| ---: | ---: | ---: | ---: | ---: |
+| 5% | 11,534 | 87.490% (86.925--88.056) | 71.705% | 87.043% |
+| 10% | 20,833 | 89.610% (89.390--89.830) | 74.332% | 89.451% |
+| 25% | 50,637 | 91.555% (91.462--91.649) | 75.940% | 91.805% |
+| 50% | 100,385 | 92.892% (92.785--92.998) | 76.674% | 92.815% |
+| 75% | 150,782 | 93.378% (93.306--93.450) | 77.048% | 93.330% |
+| 100% | 199,199 | 93.830% (93.777--93.882) | 77.338% | 93.849% |
+
+The paired 100%-minus-75% gain was +0.452 accuracy points (95% t interval
++0.344 to +0.560), so the full-data curve is still rising. Full-data errors
+were concentrated in OOV tokens: their error rate exceeded the overall error
+rate by 16.492 points (16.053--16.931). One-count training tokens had an 8.956
+point excess error rate (7.867--10.046).
+
+Matched mixed-minus-leave-one-domain-out accuracy on each held-out development
+domain was:
+
+| Domain | Matched repeats | Gain (95% t interval), points | State |
+| --- | ---: | ---: | --- |
+| answers | 4/5 | +0.465 (+0.040--+0.890) | wide |
+| email | 4/5 | +1.607 (+1.216--+1.998) | positive |
+| newsgroup | 3/5 | +0.602 (-0.258--+1.462) | wide |
+| reviews | 4/5 | +1.281 (+1.044--+1.519) | positive |
+| weblog | 4/5 | +0.826 (+0.457--+1.196) | positive |
+
+Six of 25 whole-document mixed controls exceeded the frozen 1% quantity
+tolerance and were excluded rather than silently compared. This leaves
+credible diversity gains in three domains but incomplete or wide evidence in
+two.
+
+Downstream MWE utility did not improve materially after the 50% training size.
+Generated-filter precision was 9.04%, 9.15%, and 9.04% at 5%, 50%, and 100%
+training, versus 0.42% unfiltered. Recall was 23.48%, 26.09%, and 26.09% on the
+23-span development subset. Thus more retained gold improved UPOS accuracy but
+did not rescue the retained c2 recipe's downstream contract failure.
+
+The recorded diagnosis is `inconclusive`: volume, diversity, and low-support
+signals all exist, so the evidence rejects a simple architecture-only plateau
+but cannot identify one primary data limitation. This result supplies the
+human portfolio gate with a reason to test complementary sequence-aware
+architectures; it does not itself authorize augmentation or pseudo-labeling.
+
 This is a research interpretation rule, not a release gate. A future,
 separate augmentation provenance decision would require reproducible positive
 data-barrier evidence, concentration in OOV/low-support slices, and
