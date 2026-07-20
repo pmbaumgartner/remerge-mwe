@@ -89,6 +89,8 @@ evidence for a rejected experiment, not a production adapter or a final-split
 evaluation. Before invoking the trainer, the command requires the exact pinned
 train and development SHA-256 values above; an arbitrary path, including the
 protected split, is rejected before any model or report is produced.
+The trainer reads temporary copies made from those exact validated bytes, so a
+later path or symlink replacement cannot change the input after validation.
 
 The pinned acquisition reproduced c2 on 2026-07-19 at
 `0.9376913594973956` development accuracy.  Its train/dev SHA-256 values were

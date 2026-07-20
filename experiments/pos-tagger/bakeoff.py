@@ -24,6 +24,7 @@ import platform
 import statistics
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import Any, Protocol, Sequence
 
@@ -694,8 +695,10 @@ def reproduce_retained_c2(
     train: Path, dev: Path, output: Path, report: Path
 ) -> dict[str, Any]:
     """Run the retained c2 trainer unchanged and reject a non-reproducing result."""
-    train_digest = _sha(train)
-    dev_digest = _sha(dev)
+    train_bytes = train.read_bytes()
+    dev_bytes = dev.read_bytes()
+    train_digest = hashlib.sha256(train_bytes).hexdigest()
+    dev_digest = hashlib.sha256(dev_bytes).hexdigest()
     if train_digest != RETAINED_C2_TRAIN_SHA256:
         raise RejectedEvaluation(
             "retained c2 reproduction requires the pinned training split"
@@ -705,31 +708,36 @@ def reproduce_retained_c2(
             "retained c2 reproduction requires the pinned development split"
         )
     trainer = Path(__file__).parents[1] / "pos-linear" / "train.py"
-    command = [
-        sys.executable,
-        str(trainer),
-        "--train",
-        str(train),
-        "--dev",
-        str(dev),
-        "--output",
-        str(output),
-        "--report",
-        str(report),
-        "--registration-template",
-        str(report.with_suffix(".registration.json")),
-        "--seed",
-        "20260719",
-        "--epochs",
-        "8",
-        "--buckets",
-        str(1 << 18),
-        "--candidate-id",
-        "c2",
-        "--source-revision",
-        "0" * 40,
-    ]
-    subprocess.run(command, check=True)
+    with TemporaryDirectory(prefix="remerge-c2-pinned-") as directory:
+        immutable_train = Path(directory) / "train.conllu"
+        immutable_dev = Path(directory) / "dev.conllu"
+        immutable_train.write_bytes(train_bytes)
+        immutable_dev.write_bytes(dev_bytes)
+        command = [
+            sys.executable,
+            str(trainer),
+            "--train",
+            str(immutable_train),
+            "--dev",
+            str(immutable_dev),
+            "--output",
+            str(output),
+            "--report",
+            str(report),
+            "--registration-template",
+            str(report.with_suffix(".registration.json")),
+            "--seed",
+            "20260719",
+            "--epochs",
+            "8",
+            "--buckets",
+            str(1 << 18),
+            "--candidate-id",
+            "c2",
+            "--source-revision",
+            "0" * 40,
+        ]
+        subprocess.run(command, check=True)
     result = json.loads(report.read_text(encoding="utf-8"))
     actual = result["dev_accuracy_quantized_candidate_pruned"]
     if abs(actual - RETAINED_C2_ACCURACY) > RETAINED_C2_TOLERANCE:

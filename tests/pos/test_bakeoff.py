@@ -201,6 +201,50 @@ def test_c2_reproduction_rejects_unpinned_inputs_before_training(
         )
 
 
+def test_c2_reproduction_trains_from_the_validated_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    train = tmp_path / "train.conllu"
+    dev = tmp_path / "dev.conllu"
+    train.write_bytes(b"pinned train")
+    dev.write_bytes(b"pinned dev")
+    monkeypatch.setattr(bakeoff, "RETAINED_C2_TRAIN_SHA256", bakeoff._sha(train))
+    monkeypatch.setattr(bakeoff, "RETAINED_C2_DEV_SHA256", bakeoff._sha(dev))
+    consumed_paths: list[Path] = []
+
+    def fake_run(command: list[str], *, check: bool) -> None:
+        assert check is True
+        immutable_train = Path(command[command.index("--train") + 1])
+        immutable_dev = Path(command[command.index("--dev") + 1])
+        consumed_paths.extend((immutable_train, immutable_dev))
+        train.write_bytes(b"swapped train")
+        dev.write_bytes(b"swapped dev")
+        assert immutable_train.read_bytes() == b"pinned train"
+        assert immutable_dev.read_bytes() == b"pinned dev"
+        report_path = Path(command[command.index("--report") + 1])
+        report_path.write_text(
+            json.dumps(
+                {
+                    "dev_accuracy_quantized_candidate_pruned": (
+                        bakeoff.RETAINED_C2_ACCURACY
+                    )
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(bakeoff.subprocess, "run", fake_run)
+
+    result = bakeoff.reproduce_retained_c2(
+        train, dev, tmp_path / "artifact", tmp_path / "report"
+    )
+
+    assert result["dev_accuracy_quantized_candidate_pruned"] == (
+        bakeoff.RETAINED_C2_ACCURACY
+    )
+    assert all(not path.exists() for path in consumed_paths)
+
+
 def test_warm_measurement_rejects_stateful_candidate_output() -> None:
     class StatefulCandidate(_Candidate):
         calls = 0
