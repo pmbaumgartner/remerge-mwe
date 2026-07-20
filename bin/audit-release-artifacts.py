@@ -24,6 +24,21 @@ FORBIDDEN_SUFFIXES = {
     ".pt",
     ".safetensors",
 }
+ALLOWED_RUST_SOURCES = {
+    "rust/src/bigram_data.rs",
+    "rust/src/engine.rs",
+    "rust/src/interner.rs",
+    "rust/src/lexeme_data.rs",
+    "rust/src/lexeme_store.rs",
+    "rust/src/lib.rs",
+    "rust/src/pos/annotations.rs",
+    "rust/src/pos/candidates.rs",
+    "rust/src/pos/filter.rs",
+    "rust/src/pos/mod.rs",
+    "rust/src/py_bindings.rs",
+    "rust/src/scoring.rs",
+    "rust/src/types.rs",
+}
 
 
 def digest(path: Path) -> str:
@@ -61,14 +76,15 @@ def audit_wheel(path: Path) -> dict[str, object]:
         stub_names = [name for name in names if name.endswith("remerge/_core.pyi")]
         if len(stub_names) != 1:
             raise AssertionError("wheel must contain the native extension stub")
+        if b"LinearPosModel" in archive.read(stub_names[0]):
+            raise AssertionError("wheel stub exposes the rejected linear model")
     return {"path": str(path), "sha256": digest(path), "members": names}
 
 
 def audit_sdist(path: Path) -> dict[str, object]:
     with tarfile.open(path, "r:*") as archive:
-        names = sorted(
-            member.name for member in archive.getmembers() if member.isfile()
-        )
+        files = [member for member in archive.getmembers() if member.isfile()]
+        names = sorted(member.name for member in files)
     if any(forbidden_member(name) for name in names):
         raise AssertionError("sdist contains forbidden test, corpus, or model data")
     allowed_top_level = {
@@ -85,11 +101,18 @@ def audit_sdist(path: Path) -> dict[str, object]:
         relative = PurePosixPath(*PurePosixPath(name).parts[1:])
         if str(relative) in allowed_top_level:
             continue
-        if relative.parts[:2] == ("rust", "src"):
+        if str(relative) in ALLOWED_RUST_SOURCES:
             continue
         if relative.parts[:2] == ("src", "remerge"):
             continue
         raise AssertionError(f"sdist member is outside the allowlist: {relative}")
+    stubs = [member for member in files if member.name.endswith("src/remerge/_core.pyi")]
+    if len(stubs) != 1:
+        raise AssertionError("sdist must contain the native extension stub")
+    with tarfile.open(path, "r:*") as archive:
+        stub = archive.extractfile(stubs[0])
+        if stub is None or b"LinearPosModel" in stub.read():
+            raise AssertionError("sdist stub exposes the rejected linear model")
     return {"path": str(path), "sha256": digest(path), "members": names}
 
 

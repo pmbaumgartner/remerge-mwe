@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 import remerge
+from bin.pos_release_fixture import project_authored_workload as canonical_workload
 from tests.pos.conftest import (
     GoldDocument,
     REFERENCE_WORKLOAD_TOKENS,
@@ -26,7 +27,6 @@ from tests.pos.conftest import (
     raw_documents,
     require_single_threaded_environment,
     timed_measurement,
-    workload_digest,
     write_evidence,
 )
 
@@ -240,7 +240,7 @@ def test_pretagged_release_benchmark(pytestconfig: pytest.Config) -> None:
     try:
         require_single_threaded_environment()
         reference = project_authored_workload(REFERENCE_WORKLOAD_TOKENS)
-        fixture_sha256 = workload_digest(reference)
+        fixture_sha256 = canonical_workload(REFERENCE_WORKLOAD_TOKENS).digest
         if fixture_sha256 != REFERENCE_WORKLOAD_SHA256:
             raise AssertionError("project-authored release workload digest changed")
         supplied = _supplied_documents(reference)

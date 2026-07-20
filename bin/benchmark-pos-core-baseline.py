@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
-from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -19,20 +18,12 @@ from time import perf_counter, time
 
 import remerge
 
+from pos_release_fixture import project_authored_workload
+
 
 TOKENS = 100_000
 WARMUPS = 3
 REPETITIONS = 15
-CYCLE = (
-    ("bright", "ADJ"),
-    ("river", "NOUN"),
-    ("flows", "VERB"),
-    ("swiftly", "ADV"),
-    ("quiet", "ADJ"),
-    ("garden", "NOUN"),
-    ("grows", "VERB"),
-    ("today", "ADV"),
-)
 
 
 @dataclass(frozen=True)
@@ -41,25 +32,6 @@ class Measurement:
     median_seconds: float
     p95_seconds: float
     iqr_over_median: float
-
-
-def fixture() -> tuple[str, str]:
-    tokens = [CYCLE[index % len(CYCLE)] for index in range(TOKENS)]
-    sentences = [tokens[offset : offset + 32] for offset in range(0, TOKENS, 32)]
-    payload = [
-        {
-            "document_id": "project-authored-0",
-            "domain": "project-authored",
-            "sentences": [
-                [[form, upos] for form, upos in sentence] for sentence in sentences
-            ],
-        }
-    ]
-    digest = sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
-    raw = "\n".join(
-        " ".join(form for form, _upos in sentence) for sentence in sentences
-    )
-    return raw, digest
 
 
 def measure(operation) -> Measurement:
@@ -89,10 +61,10 @@ def main() -> None:
     parser.add_argument("--source-revision", required=True)
     args = parser.parse_args()
 
-    raw, digest = fixture()
+    workload = project_authored_workload(TOKENS)
 
     def operation():
-        return remerge.run([raw], 1, method="frequency", min_count=1)
+        return remerge.run([workload.raw], 1, method="frequency", min_count=1)
 
     measurement = measure(operation)
     winner = operation()[0]
@@ -100,7 +72,7 @@ def main() -> None:
         "schema_version": 1,
         "generated_at_unix": time(),
         "source_revision": args.source_revision,
-        "fixture_sha256": digest,
+        "fixture_sha256": workload.digest,
         "winner_signature": [
             list(winner.merged_lexeme.word),
             winner.score,

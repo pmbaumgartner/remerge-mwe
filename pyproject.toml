@@ -33,6 +33,7 @@ requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 markers = [
     "performance: opt-in runtime checks over the reference corpus",
 ]

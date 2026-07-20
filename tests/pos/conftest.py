@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from hashlib import sha256
 import json
 import math
 import os
@@ -19,6 +18,7 @@ from typing import Any
 import pytest
 
 import remerge
+from bin.pos_release_fixture import project_authored_workload as canonical_workload
 
 
 BOOTSTRAP_RESAMPLES = 10_000
@@ -267,42 +267,12 @@ def calculate_utility_metrics(
 def project_authored_workload(token_count: int) -> tuple[GoldDocument, ...]:
     """Generate a seed-free, MIT project-authored workload of exactly N tokens."""
 
-    if token_count <= 0:
-        raise ValueError("token_count must be positive")
-    cycle = (
-        ("bright", "ADJ"),
-        ("river", "NOUN"),
-        ("flows", "VERB"),
-        ("swiftly", "ADV"),
-        ("quiet", "ADJ"),
-        ("garden", "NOUN"),
-        ("grows", "VERB"),
-        ("today", "ADV"),
-    )
-    tokens = [
-        remerge.TaggedToken(*cycle[index % len(cycle)]) for index in range(token_count)
-    ]
-    sentence_size = 32
+    workload = canonical_workload(token_count)
     sentences = tuple(
-        tuple(tokens[offset : offset + sentence_size])
-        for offset in range(0, token_count, sentence_size)
+        tuple(remerge.TaggedToken(form, upos) for form, upos in sentence)
+        for sentence in workload.sentences
     )
-    return (GoldDocument("project-authored-0", "project-authored", sentences),)
-
-
-def workload_digest(documents: Sequence[GoldDocument]) -> str:
-    payload = [
-        {
-            "document_id": document.document_id,
-            "domain": document.domain,
-            "sentences": [
-                [[token.form, token.upos] for token in sentence]
-                for sentence in document.sentences
-            ],
-        }
-        for document in documents
-    ]
-    return sha256(json.dumps(payload, separators=(",", ":")).encode()).hexdigest()
+    return (GoldDocument(workload.document_id, workload.domain, sentences),)
 
 
 def timed_measurement(operation: Callable[[], Any]) -> TimedMeasurement:
