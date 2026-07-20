@@ -1,17 +1,40 @@
 ---
 kata: brx7
 created: 2026-07-19
-status: awaiting-human-decision
+status: decided
 ---
 
 # POS pilot portfolio and data-strategy decision
 
-## Decision required
+## Final record
 
-Peter must select one pilot portfolio and one augmentation-provenance posture.
-This is a consequential human gate. Nothing here approves a production model,
-an external dependency, a corpus, a teacher, pseudo-label generation, or use of
-the protected final split.
+**Finding:** Gold-data volume, domain diversity, and low-support errors all
+matter, but c2's downstream MWE utility plateaus. The best next information
+comes from two complementary sequence-aware models, not more data machinery.
+
+**Decision:** On 2026-07-20, Peter selected **P1 + D1**: run a TnT-style
+trigram HMM and an averaged structured perceptron sequentially, and defer any
+augmentation-provenance gate.
+
+**Recommendation:** Execute the two gold-only pilots with work in progress
+limited to one. Reassess architecture and product boundary after both reports;
+do not create CRF, teacher, corpus, or pseudo-label work under this decision.
+
+**Follow-up issues:** `bkh6` runs the TnT-style pilot first. `1wda` runs the
+structured-perceptron pilot and is blocked by `bkh6`. No augmentation issue was
+created under D1.
+
+**Confidence:** Medium. The evidence strongly motivates sequence-aware pilots,
+but the small MWE development denominator and incomplete matched diversity
+repeats leave uncertainty about which mechanism will matter most.
+
+**Rejected alternatives:** P2's CRF ceiling and D2's provenance analysis were
+deferred as premature cost and coordination. P3/D3 would leave credible
+sequence and data hypotheses untested or irreversibly foreclose later evidence.
+
+Nothing in this decision approves a production model, an external dependency,
+a corpus, a teacher, pseudo-label generation, or use of the protected final
+split.
 
 ## Evidence consumed
 
@@ -115,6 +138,8 @@ errors persist, which would justify opening the provenance gate.
 
 ## Human record
 
-- Pilot portfolio: **awaiting Peter**
-- Augmentation provenance: **awaiting Peter**
-- Rationale or amendments: **awaiting Peter**
+- Pilot portfolio: **P1 — TnT-style trigram HMM and averaged structured perceptron**
+- Augmentation provenance: **D1 — deferred**
+- Decision owner: **Peter**
+- Recorded: **2026-07-20, explicit task response `P1 + d1`**
+- Rationale or amendments: **Accepted the recommendation without amendment**
