@@ -1,7 +1,7 @@
 ---
 kata: bkh6
 created: 2026-07-20
-status: ready-for-development-evidence
+status: rejected
 ---
 
 # TnT-style UPOS pilot
@@ -92,3 +92,31 @@ accuracy, ambiguous accuracy, generated-MWE precision, or generated-MWE
 recall versus c2. Otherwise it rejects while preserving the specific reason.
 A completed, attributable rejection is the intended bounded research outcome;
 promotion or any final evaluation requires a separate human decision.
+
+## Completed development evidence
+
+The bounded run completed from clean revision `91fd197` against the pinned
+train and development hashes and the retained c2 artifact. Its 104 KiB report
+has SHA-256
+`fdb003f9f862837ced77bc198ed672942501b907d2b6d195bb0dab740ebb567d`.
+All ten repetition records were present, the five artifacts within each grid
+were byte-identical, every candidate decision was `reject`, and
+`protected_final_evaluated` was `false` throughout.
+
+| Candidate | Overall | Macro F1 | OOV | Ambiguous | MWE precision / recall | Artifact | Load median | Throughput |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| retained c2 | 93.792% | 88.401% | 77.536% | 93.756% | 9.09% / 26.09% | 4.29 MiB | 23 ms | 31,910 tok/s |
+| TnT grid 0 | 91.181% | 87.070% | 61.455% | 91.062% | 9.09% / 26.09% | 1.37 MiB | 879 ms | 8,148 tok/s |
+| TnT grid 1 | 91.217% | 87.004% | 61.999% | 91.046% | 9.38% / 26.09% | 1.73 MiB | 4,084 ms | 7,644 tok/s |
+
+The deterministic rule selected grid 1, artifact SHA-256
+`76e850be9510aa64d69299592884da5a39e17e3a5b9a22844179e876231a9e94`,
+and rejected it. It missed the unchanged overall, OOV, MWE precision, MWE
+recall, load, and throughput gates. Relative to c2 it lost 2.574 overall
+accuracy points, 1.397 macro-F1 points, 15.537 OOV points, and 2.710 ambiguous
+points. Its 0.284-point generated-MWE precision increase did not change recall
+and was far below the gate.
+
+This completes and rejects the TnT research packet. No TnT artifact is
+registered for protected qualification or production integration. P1 proceeds
+only to the separately bounded structured-perceptron packet `1wda`.
