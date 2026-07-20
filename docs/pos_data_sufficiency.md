@@ -20,6 +20,14 @@ retained development tokens. MWE utility uses only the aligned 5,366-token,
 23-span STREUSLE development subset through the common bakeoff utility
 function.
 
+Before planning, the command hashes the evaluator, bakeoff, c2 adapter,
+retained trainer, evaluation loader and sensors, project-authored utility
+fixture, Python package files, loaded native extension, manifest, and pinned
+train/development inputs. It verifies that complete map before and after every
+condition and once after all workers complete; any drift rejects the evidence.
+The provenance contains both the implementation/evidence hash maps and the
+data hashes.
+
 The default recipe matches retained c2 semantics: eight epochs, 262,144
 feature buckets, the same direct-lexicon calibration, quantization, and
 candidate pruning. A repeated condition changes only the documented training
@@ -134,6 +142,16 @@ to +0.25 accuracy points. A negative interval is never called flat. The report
 includes OOV, unseen/one-count token-frequency, and zero/low tag-support error
 excess intervals so the diagnosis cannot silently treat concentrated data
 errors as architectural evidence.
+
+Every interval has an explicit `positive`, `flat`, `negative`, `wide`, or
+`unavailable` state. Unmatched, missing, wide, negative, or conflicting
+required diversity/concentration evidence makes the diagnosis `inconclusive`.
+Concentration slices with no observations in at least two repetitions remain
+reported as `unavailable` but are non-applicable rather than blockers.
+Calibration reports always use `unavailable`, irrespective of their observed
+metrics. Condition IDs include the fraction index as well as its value, so
+nearby fractions cannot overwrite one another. The command rejects more than
+30 repetitions rather than substituting an unsupported normal approximation.
 
 This is a research interpretation rule, not a release gate. A future,
 separate augmentation provenance decision would require reproducible positive

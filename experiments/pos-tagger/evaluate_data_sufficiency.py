@@ -84,6 +84,54 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _evidence_integrity(
+    acquisition_root: Path, manifest: dict[str, object]
+) -> dict[str, dict[str, str]]:
+    sources = manifest["sources"]
+    splits = manifest["splits"]
+    if not isinstance(sources, dict) or not isinstance(splits, dict):
+        raise StudyError("manifest sources or splits are malformed")
+    extension = importlib.util.find_spec("remerge._core")
+    if extension is None or extension.origin is None:
+        raise StudyError("cannot locate the loaded remerge extension")
+    paths: dict[str, Path] = {
+        "evaluator": Path(__file__).resolve(),
+        "bakeoff": ROOT / "experiments/pos-tagger/bakeoff.py",
+        "c2_adapter": ROOT / "experiments/pos-tagger/c2_adapter.py",
+        "trainer": ROOT / "experiments/pos-linear/train.py",
+        "loader": ROOT / "tests/pos/evaluation/loader.py",
+        "pos_sensors": ROOT / "tests/pos/conftest.py",
+        "pos_release_fixture": ROOT / "bin/pos_release_fixture.py",
+        "remerge_init": ROOT / "src/remerge/__init__.py",
+        "remerge_core": ROOT / "src/remerge/core.py",
+        "remerge_extension": Path(extension.origin),
+        "manifest": ROOT / "tests/pos/evaluation/manifest.json",
+    }
+    for split_name in ("train", "dev"):
+        split = splits[split_name]
+        if not isinstance(split, dict):
+            raise StudyError(f"manifest split {split_name!r} is malformed")
+        source = sources[split["source"]]
+        if not isinstance(source, dict):
+            raise StudyError(f"manifest source for {split_name!r} is malformed")
+        paths[split_name] = acquisition_root / source["relative_root"] / split["path"]
+    return {
+        "paths": {name: str(path) for name, path in paths.items()},
+        "hashes": {name: _sha(path) for name, path in paths.items()},
+    }
+
+
+def _verify_evidence_integrity(integrity: dict[str, dict[str, str]]) -> None:
+    actual = {name: _sha(Path(path)) for name, path in integrity["paths"].items()}
+    changed = {
+        name: {"expected": expected, "actual": actual[name]}
+        for name, expected in integrity["hashes"].items()
+        if actual[name] != expected
+    }
+    if changed:
+        raise StudyError(f"evidence input drift detected: {changed}")
+
+
 def _code_revision() -> str:
     return subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
@@ -491,8 +539,10 @@ def _condition_job(
     buckets: int,
     model_id: str,
     tokenizer_id: str,
+    integrity: dict[str, dict[str, str]],
     evaluate_mwe: bool,
 ) -> dict[str, Any]:
+    _verify_evidence_integrity(integrity)
     harness = _harness()
     trainer = _trainer()
     adapter = _adapter()
@@ -580,6 +630,7 @@ def _condition_job(
         )
         result["runtime_seconds"]["mwe_utility"] = perf_counter() - started
         result["mwe_status"] = "evaluated on aligned development subset"
+    _verify_evidence_integrity(integrity)
     return result
 
 
@@ -589,6 +640,8 @@ def _t_interval(
     """Two-sided 95% Student-t interval across independent repetitions."""
 
     numeric = [float(value) for value in values if value is not None]
+    if len(numeric) > 30:
+        raise StudyError("Student-t uncertainty supports at most 30 repetitions")
     if not numeric:
         return {
             "count": 0,
@@ -721,13 +774,16 @@ def _condition_metric(condition: dict[str, Any], metric: str) -> float | None:
     return condition[metric]
 
 
-def _demonstrably_flat(interval: dict[str, Any]) -> bool:
-    return (
-        interval["lower"] is not None
-        and interval["upper"] is not None
-        and interval["lower"] >= 0
-        and interval["upper"] <= DIAGNOSIS_EQUIVALENCE_ACCURACY
-    )
+def _interval_state(interval: dict[str, Any]) -> str:
+    if interval["count"] < 2 or interval["lower"] is None or interval["upper"] is None:
+        return "unavailable"
+    if interval["lower"] > DIAGNOSIS_EQUIVALENCE_ACCURACY:
+        return "positive"
+    if interval["lower"] >= 0 and interval["upper"] <= DIAGNOSIS_EQUIVALENCE_ACCURACY:
+        return "flat"
+    if interval["upper"] < 0:
+        return "negative"
+    return "wide"
 
 
 def _error_concentration(
@@ -770,8 +826,21 @@ def _error_concentration(
 
 
 def _diagnosis(
-    conditions: Sequence[dict[str, Any]], fractions: Sequence[float]
+    conditions: Sequence[dict[str, Any]],
+    fractions: Sequence[float],
+    *,
+    calibration: bool,
 ) -> dict[str, Any]:
+    if calibration or not conditions:
+        return {
+            "diagnosis": "unavailable",
+            "interval_states": {},
+            "rule": (
+                "Calibration output is never a data-barrier diagnosis."
+                if calibration
+                else "A planned study has no completed conditions to diagnose."
+            ),
+        }
     curves = [item for item in conditions if item["kind"] == "learning_curve"]
     by_fraction: dict[float, list[dict[str, Any]]] = {}
     for condition in curves:
@@ -809,26 +878,74 @@ def _diagnosis(
             mixed, leave_out, metric="held_out_domain_accuracy"
         )
     concentration = _error_concentration(conditions, fractions[-1])
-    concentrated = any(
-        value["lower"] is not None and value["lower"] > 0
-        for value in concentration.values()
+    states = {
+        "volume": _interval_state(marginal),
+        "diversity": {
+            domain: _interval_state(value) for domain, value in diversity.items()
+        },
+        "concentration": {
+            name: _interval_state(value) for name, value in concentration.items()
+        },
+    }
+    required_domains = {
+        str(item["held_out_domain"])
+        for item in conditions
+        if item["kind"] == "mixed_control"
+    }
+    unmatched_domains = {
+        str(item["held_out_domain"])
+        for item in conditions
+        if item["kind"] in {"mixed_control", "leave_one_domain_out"}
+        and item.get("matching", {}).get("status") != "matched"
+    }
+    diversity_states = states["diversity"]
+    concentration_states = states["concentration"]
+    applicable_concentration_states = {
+        name: state
+        for name, state in concentration_states.items()
+        if concentration[name]["count"] >= 2
+    }
+    diversity_complete = (
+        set(diversity_states) == required_domains and not unmatched_domains
     )
-    positive_volume = marginal["lower"] is not None and marginal["lower"] > 0
-    positive_diversity = any(
-        value["lower"] is not None and value["lower"] > 0
-        for value in diversity.values()
+    diversity_valid = diversity_complete and all(
+        state in {"positive", "flat"} for state in diversity_states.values()
     )
-    flat = _demonstrably_flat(marginal)
-    diversity_flat = bool(diversity) and all(
-        _demonstrably_flat(value) for value in diversity.values()
+    concentration_valid = bool(applicable_concentration_states) and all(
+        state in {"positive", "flat", "negative"}
+        for state in applicable_concentration_states.values()
     )
+    concentration_conflict = (
+        "positive" in applicable_concentration_states.values()
+        and "negative" in applicable_concentration_states.values()
+    )
+    concentrated = "positive" in applicable_concentration_states.values()
+    diversity_flat = diversity_complete and all(
+        state == "flat" for state in diversity_states.values()
+    )
+    diversity_positive = diversity_valid and any(
+        state == "positive" for state in diversity_states.values()
+    )
+    volume_state = states["volume"]
     diagnosis = (
         "volume_limited"
-        if positive_volume and diversity_flat and concentrated
+        if volume_state == "positive"
+        and diversity_flat
+        and concentration_valid
+        and not concentration_conflict
+        and concentrated
         else "diversity_limited"
-        if positive_diversity and flat and concentrated
+        if diversity_positive
+        and volume_state == "flat"
+        and concentration_valid
+        and not concentration_conflict
+        and concentrated
         else "architecture_limited"
-        if flat and diversity_flat and not concentrated
+        if volume_state == "flat"
+        and diversity_flat
+        and concentration_valid
+        and not concentration_conflict
+        and not concentrated
         else "inconclusive"
     )
     return {
@@ -836,7 +953,15 @@ def _diagnosis(
         "full_data_marginal_accuracy": marginal,
         "matched_mixed_minus_leave_out_accuracy": diversity,
         "error_concentration": concentration,
-        "rule": "A data-limited diagnosis requires a positive repeated-sample t interval, a demonstrably flat non-selected axis, and positive OOV or low-support error excess. Flat means an interval entirely within [0, 0.25 percentage points]; negative effects are never called flat.",
+        "interval_states": states
+        | {
+            "unmatched_domains": sorted(unmatched_domains),
+            "diversity_complete": diversity_complete,
+            "applicable_concentration": sorted(applicable_concentration_states),
+            "concentration_valid": concentration_valid,
+            "concentration_conflict": concentration_conflict,
+        },
+        "rule": "States are positive, flat, negative, wide, or unavailable. A data-limited diagnosis requires positive evidence, a flat non-selected axis, complete matched diversity evidence, and non-conflicting positive concentration evidence. Flat means an interval entirely within [0, 0.25 percentage points]; negative, wide, unavailable, unmatched, or conflicting evidence is inconclusive.",
         "augmentation_gate_criteria": "Open a separate provenance decision only after reproducible positive full-data or matched-diversity intervals, low-support/OOV-concentrated errors, and representative development MWE utility; this study does not authorize augmentation.",
     }
 
@@ -854,10 +979,10 @@ def _jobs(
     jobs = []
     all_tokens = sum(domain_tokens.values())
     for replicate in range(replicates):
-        for fraction in fractions:
+        for fraction_index, fraction in enumerate(fractions):
             jobs.append(
                 {
-                    "id": f"curve-f{fraction:.2f}-r{replicate}",
+                    "id": f"curve-i{fraction_index}-f{fraction:.6f}-r{replicate}",
                     "kind": "learning_curve",
                     "fraction": fraction,
                     "sample_fraction": fraction,
@@ -937,6 +1062,8 @@ def main() -> None:
     arguments = parser.parse_args()
     if arguments.replicates < 1:
         parser.error("--replicates must be positive")
+    if arguments.replicates > 30:
+        parser.error("--replicates must not exceed 30")
     if arguments.workers < 1 or arguments.epochs < 1:
         parser.error("--workers and --epochs must be positive")
     if arguments.buckets < 2 or arguments.buckets & (arguments.buckets - 1):
@@ -965,6 +1092,7 @@ def main() -> None:
         if not arguments.calibration:
             _require_clean_implementation()
         manifest = load_manifest()
+        integrity = _evidence_integrity(arguments.acquisition_root, manifest)
         train = load_tagged_split(manifest, arguments.acquisition_root, "train")
         domain_documents = _domain_documents(train)
         domain_tokens = {
@@ -989,6 +1117,12 @@ def main() -> None:
             "code_revision": _code_revision(),
             "manifest_sha256": _sha(ROOT / "tests/pos/evaluation/manifest.json"),
             "data_hashes": _data_hashes(manifest, arguments.acquisition_root),
+            "implementation_hashes": {
+                name: digest
+                for name, digest in integrity["hashes"].items()
+                if name not in {"train", "dev"}
+            },
+            "evidence_hashes": integrity["hashes"],
             "acquisition_root": str(arguments.acquisition_root),
             "candidate_recipe": {
                 "name": "retained-c2-semantics",
@@ -1017,12 +1151,16 @@ def main() -> None:
             },
         }
         if arguments.dry_run:
+            _verify_evidence_integrity(integrity)
             evidence = {
                 "schema_version": 1,
                 "status": "calibration_planned" if arguments.calibration else "planned",
                 "protected_final_evaluated": False,
                 "provenance": provenance,
                 "conditions": conditions,
+                "diagnosis": _diagnosis(
+                    [], arguments.fractions, calibration=arguments.calibration
+                ),
                 "development_only": True,
             }
         else:
@@ -1034,6 +1172,7 @@ def main() -> None:
                 "buckets": arguments.buckets,
                 "model_id": "remerge-pos-linear-v1",
                 "tokenizer_id": "unicode-whitespace-v1",
+                "integrity": integrity,
             }
             if arguments.workers == 1:
                 conditions = [
@@ -1049,6 +1188,7 @@ def main() -> None:
                         for job in conditions
                     ]
                     conditions = [future.result() for future in futures]
+            _verify_evidence_integrity(integrity)
             conditions.sort(key=lambda item: item["id"])
             evidence = {
                 "schema_version": 1,
@@ -1068,7 +1208,9 @@ def main() -> None:
                 },
                 "conditions": conditions,
                 "aggregates": _aggregate(conditions),
-                "diagnosis": _diagnosis(conditions, arguments.fractions),
+                "diagnosis": _diagnosis(
+                    conditions, arguments.fractions, calibration=arguments.calibration
+                ),
                 "reference_error_overlap": {
                     "status": "unavailable",
                     "reason": "no approved offline reference prediction was supplied",

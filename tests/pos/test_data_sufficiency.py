@@ -97,7 +97,10 @@ def test_diagnosis_prefers_inconclusive_when_data_signals_conflict() -> None:
                 }
             )
 
-    assert study._diagnosis(conditions, (0.75, 1.0))["diagnosis"] == "inconclusive"
+    assert (
+        study._diagnosis(conditions, (0.75, 1.0), calibration=False)["diagnosis"]
+        == "inconclusive"
+    )
 
 
 def test_mixed_control_uses_all_domains_at_the_leave_out_requested_budget() -> None:
@@ -155,7 +158,110 @@ def test_repeated_sample_t_interval_is_not_a_percentile_interval() -> None:
 
 
 def test_negative_interval_is_not_treated_as_flat() -> None:
-    assert not study._demonstrably_flat({"lower": -0.001, "upper": 0.001, "count": 5})
+    assert (
+        study._interval_state({"lower": 0.003, "upper": 0.004, "count": 5})
+        == "positive"
+    )
+    assert study._interval_state({"lower": 0.0, "upper": 0.002, "count": 5}) == "flat"
+    assert (
+        study._interval_state({"lower": -0.001, "upper": 0.001, "count": 5}) == "wide"
+    )
+    assert (
+        study._interval_state({"lower": -0.002, "upper": -0.001, "count": 5})
+        == "negative"
+    )
+    assert (
+        study._interval_state({"lower": None, "upper": None, "count": 1})
+        == "unavailable"
+    )
+
+
+def test_calibration_diagnosis_is_always_unavailable() -> None:
+    diagnosis = study._diagnosis((), (1.0,), calibration=True)
+
+    assert diagnosis["diagnosis"] == "unavailable"
+    assert diagnosis["interval_states"] == {}
+
+
+def test_absent_concentration_bucket_does_not_block_diagnosis() -> None:
+    conditions = []
+    for seed in range(5):
+        for fraction, accuracy in ((0.75, 0.80), (1.0, 0.81)):
+            conditions.append(
+                {
+                    "kind": "learning_curve",
+                    "fraction": fraction,
+                    "held_out_domain": None,
+                    "model_seed": seed,
+                    "quality": {
+                        "overall_accuracy": accuracy,
+                        "oov_accuracy": accuracy - 0.10,
+                    },
+                    "error_slices": {"token_frequency": {}, "tag_support": {}},
+                }
+            )
+        for kind in ("mixed_control", "leave_one_domain_out"):
+            conditions.append(
+                {
+                    "kind": kind,
+                    "fraction": 1.0,
+                    "held_out_domain": "reviews",
+                    "model_seed": seed,
+                    "quality": {"overall_accuracy": 0.80, "oov_accuracy": 0.70},
+                    "held_out_domain_accuracy": 0.80,
+                    "matching": {"status": "matched"},
+                    "error_slices": {"token_frequency": {}, "tag_support": {}},
+                }
+            )
+
+    diagnosis = study._diagnosis(conditions, (0.75, 1.0), calibration=False)
+
+    assert diagnosis["diagnosis"] == "volume_limited"
+    assert diagnosis["interval_states"]["concentration"][
+        "tag_support_0_error_excess"
+    ] == ("unavailable")
+    assert diagnosis["interval_states"]["applicable_concentration"] == [
+        "oov_error_excess"
+    ]
+
+
+def test_planned_study_diagnosis_is_unavailable() -> None:
+    diagnosis = study._diagnosis((), study.DEFAULT_FRACTIONS, calibration=False)
+
+    assert diagnosis["diagnosis"] == "unavailable"
+    assert diagnosis["interval_states"] == {}
+
+
+def test_interval_rejects_more_than_thirty_repetitions() -> None:
+    with pytest.raises(study.StudyError, match="at most 30"):
+        study._t_interval([1.0] * 31)
+
+
+def test_fraction_index_keeps_close_fraction_condition_ids_distinct() -> None:
+    jobs = study._jobs(
+        (0.051, 0.052),
+        replicates=1,
+        seed=7,
+        domain_tokens={"reviews": 10},
+        diversity_fraction=1.0,
+        include_diversity=False,
+        mwe_fractions=(),
+    )
+
+    assert len({job["id"] for job in jobs}) == 2
+
+
+def test_evidence_integrity_rejects_hash_drift(tmp_path: Path) -> None:
+    source = tmp_path / "evaluator.py"
+    source.write_text("initial", encoding="utf-8")
+    integrity = {
+        "paths": {"evaluator": str(source)},
+        "hashes": {"evaluator": study._sha(source)},
+    }
+    source.write_text("changed", encoding="utf-8")
+
+    with pytest.raises(study.StudyError, match="drift"):
+        study._verify_evidence_integrity(integrity)
 
 
 def test_aggregate_contains_slice_tag_domain_and_mwe_uncertainty() -> None:
