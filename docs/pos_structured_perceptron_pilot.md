@@ -1,7 +1,7 @@
 ---
 kata: 1wda
 created: 2026-07-20
-status: implementation-ready
+status: rejected
 ---
 
 # Averaged structured-perceptron UPOS pilot
@@ -11,15 +11,12 @@ development-only, gold-only research implementation. It does not authorize a
 production model, final evaluation, new dependency, CRF/third pilot, corpus,
 teacher, pseudo-label, threshold change, or generated-tag API.
 
-## Current evidence status
+## Evidence status
 
-Implementation and focused controls are ready for primary review. Per the
-current handoff instruction, the full two-grid, five-seed common-harness run
-has **not** been executed, so this document makes no retain/reject decision.
-The complete run must occur from a clean committed revision with output
-outside the checkout. A later reviewed report must replace this status with
-one explicit retain or reject result; attributable rejection is a complete
-bounded research outcome.
+The full two-grid, five-seed common-harness run completed from a clean
+committed revision. Both recipes and all ten artifacts were rejected. The
+selected structured-perceptron artifact is not registered for protected
+qualification or production use.
 
 ## Model and feature contract
 
@@ -128,7 +125,7 @@ Otherwise it is rejected with the exact common-harness and comparator reasons.
 TnT remains a recorded rejected comparator; beating TnT alone cannot retain
 the perceptron.
 
-## Full evidence command (not yet run)
+## Full evidence command
 
 Run only after these files are reviewed and committed, using operator-held
 pinned artifacts/reports and an output directory outside this repository:
@@ -168,7 +165,42 @@ on `data/pos_evaluation`, train `Config(epochs=1, feature_cutoff=2,
 feature_buckets=131072)`, then time `tag_sentence` over the first 100 dev
 sentences. The full harness remains authoritative for resources.
 
-## Focused controls and residual work
+## Completed development evidence
+
+The attributable run completed from clean revision `548a22d`. Its 116 KiB
+report has SHA-256
+`ac1012332573355ce207ff99d6630532cee7caebb60a0e5bb1db5d65735d2c04`.
+It contains all ten distinct candidate artifacts, every fixed seed in both
+grids, same-window c2 and TnT comparator reports, exact source/input hashes,
+and `protected_final_evaluated: false` throughout. Every candidate decision
+is `reject`.
+
+| Grid | Overall mean | Macro-F1 mean | OOV mean | Ambiguous mean | MWE precision / recall mean |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0: 4 epochs, cutoff 2 | 94.073% | 90.835% | 78.258% | 93.862% | 8.82% / 26.09% |
+| 1: 6 epochs, cutoff 1 | 94.184% | 91.048% | 78.624% | 93.941% | 8.82% / 26.09% |
+
+The predeclared rule selected grid 1 and its fixed lowest-seed artifact,
+SHA-256
+`a394204c44c737ba9c60cc135b3176f5f86bd5728fd0ad68c5fe156384ee748d`.
+That artifact reached 94.134% overall accuracy, 90.933% macro F1, 78.427% OOV
+accuracy, and 93.943% ambiguous-token accuracy. Against c2, those are gains
+of 0.342, 2.532, 0.891, and 0.186 points respectively. It nevertheless missed
+the unchanged 95% overall and 82% OOV floors.
+
+Generated-MWE precision was 8.82%, 0.267 points below c2, and recall remained
+26.09%. The 1.45 MiB artifact loaded in a 174 ms median with 65.6 MiB maximum
+incremental RSS, but inference reached only 8,111 tokens/s against the 50,000
+tokens/s floor. Its exact rejection reasons were the overall, OOV, MWE
+precision-improvement, MWE recall, and throughput gates.
+
+The structured model materially outperformed the rejected TnT candidate and
+modestly improved c2's UPOS metrics, but it did not improve downstream MWE
+utility or satisfy the frozen contract. This completes and rejects the second
+and final P1 research packet. The portfolio now has no candidate eligible for
+protected-final registration or production integration.
+
+## Focused controls
 
 `tests/pos/test_structured_perceptron_pilot.py` covers the feature family and
 post-hash multiplicity, lexical collision rejection, exact exhaustive Viterbi
@@ -178,6 +210,5 @@ all-tag/index-zero serialization, strict corruption and size rejection,
 candidate alignment, aggregate/fixed-seed selection, shell-safe provenance,
 and immutable train/dev/MWE snapshots.
 
-Residual work is intentionally limited to primary review, commit, and the full
-external evidence run. No final evaluation, production work, third pilot, or
-augmentation work follows without the next human decision.
+No final evaluation, production work, third pilot, or augmentation work is
+authorized by this completed rejection.
