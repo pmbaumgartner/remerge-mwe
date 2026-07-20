@@ -72,6 +72,12 @@ reported `inconclusive` because one condition cannot establish a curve or a
 matched-diversity contrast. Its report is local, untracked evidence at
 `/tmp/remerge-pos-sufficiency-calibration.Kmof0d/report.json`.
 
+After committing the evaluator at `cd7ab16`, a second calibration trained all
+199,199 retained training tokens. It completed training and artifact creation
+in 100.65 seconds, full-development inference in 0.81 seconds, and MWE utility
+in 59.30 seconds. Development accuracy was 93.8119%; the run remained labelled
+`calibration` and recorded `protected_final_evaluated: false`.
+
 Before a full run, an explicit calibration command may use fewer
 fractions/repetitions and a dirty checkout:
 
@@ -90,13 +96,14 @@ is committed and the worktree is clean, has at least five ascending fractions
 through 100%, five repetitions, and matched diversity controls. This prevents
 the recorded code revision from naming an unrelated commit.
 
-At the measured calibration rate, the normal five-repetition design has about
-53 full-training-set equivalents across learning and diversity conditions.
-Budget roughly 17 single-worker hours for c2 fitting plus about 15 minutes for
-the 15 representative MWE calculations; use two workers only where memory and
-CPU contention are acceptable, for an expected 9--11 wall-clock hours. This is
-an estimate, not a performance claim; the committed full report records every
-actual condition runtime.
+The normal five-repetition design has about 53 full-training-set equivalents
+across learning and diversity conditions. Interpolating between the measured
+1% and 100% calibrations gives roughly 95 CPU-minutes for 80 condition fits and
+evaluations, plus about 15 CPU-minutes for the 15 representative MWE
+calculations. Expect roughly 55--70 wall-clock minutes with two workers or
+30--40 minutes with four, subject to CPU contention. This is an estimate, not a
+performance claim; the committed full report records every actual condition
+runtime.
 
 ## Report and diagnosis
 
