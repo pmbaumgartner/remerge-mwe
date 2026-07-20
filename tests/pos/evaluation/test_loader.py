@@ -28,6 +28,8 @@ def test_frozen_manifest_is_structurally_valid() -> None:
         cast(dict[str, object], protected_final)["candidate_registration_required"]
         is True
     )
+    mwe_dev = cast(dict[str, Any], manifest["mwe_gold"])["splits"]["dev"]
+    assert mwe_dev["expected_unretained_sentences"] == 8
 
 
 def test_manifest_rejects_a_missing_split() -> None:
@@ -94,6 +96,7 @@ def test_gold_loader_owns_dev_alignment_span_policy_and_shape(
         sha256=_file_sha256(mwe),
         minimum_in_scope_spans=1,
         expected_spans=1,
+        expected_unretained_sentences=0,
         expected_documents=1,
         expected_sentences=1,
         expected_tokens=2,
@@ -107,6 +110,67 @@ def test_gold_loader_owns_dev_alignment_span_policy_and_shape(
         ("work", "NOUN"),
     ]
     assert {(span.start_token, span.end_token) for span in gold.mwe_spans} == {(0, 2)}
+
+
+def test_gold_loader_rejects_a_wrong_unretained_sentence_count(
+    tmp_path: Path,
+) -> None:
+    manifest: dict[str, Any] = json.loads(json.dumps(load_manifest()))
+    ud_root = tmp_path / "ud-ewt"
+    streusle_root = tmp_path / "streusle" / "dev"
+    ud_root.mkdir()
+    streusle_root.mkdir(parents=True)
+    train = ud_root / "train.conllu"
+    dev = ud_root / "dev.conllu"
+    mwe = streusle_root / "streusle.ud_dev.conllulex"
+    train.write_text(_conllu("train-1", "train-1-1", (("duplicate", "NOUN"),)))
+    dev.write_text(
+        _conllu("reviews-1", "reviews-1-1", (("duplicate", "NOUN"),))
+        + _conllu(
+            "reviews-2",
+            "reviews-2-1",
+            (("good", "ADJ"), ("work", "NOUN")),
+        )
+    )
+    mwe.write_text(
+        "# sent_id = reviews-1-1\n"
+        "1\tduplicate\tduplicate\tNOUN\t_\t_\t0\troot\t_\t_\t_\n\n"
+        "# sent_id = reviews-2-1\n"
+        "1\tgood\tgood\tADJ\t_\t_\t0\troot\t_\t_\t1:1\n"
+        "2\twork\twork\tNOUN\t_\t_\t1\tobj\t_\t_\t1:2\n\n",
+        encoding="utf-8",
+    )
+    manifest["splits"]["train"].update(
+        path="train.conllu",
+        sha256=_file_sha256(train),
+        expected_source_tokens=1,
+        expected_tokens=1,
+    )
+    manifest["splits"]["dev"].update(
+        path="dev.conllu",
+        sha256=_file_sha256(dev),
+        expected_source_tokens=3,
+        expected_tokens=2,
+    )
+    dev_gold = manifest["mwe_gold"]["splits"]["dev"]
+    dev_gold.update(
+        sha256=_file_sha256(mwe),
+        minimum_in_scope_spans=1,
+        expected_spans=1,
+        expected_unretained_sentences=0,
+        expected_documents=1,
+        expected_sentences=1,
+        expected_tokens=2,
+    )
+
+    with pytest.raises(ManifestError, match="unretained sentence count 1 != frozen 0"):
+        load_gold_split(manifest, tmp_path, "dev")
+
+    dev_gold["expected_unretained_sentences"] = 1
+    gold = load_gold_split(manifest, tmp_path, "dev")
+
+    assert len(gold.sentences) == 1
+    assert len(gold.mwe_spans) == 1
 
 
 def _conllu(

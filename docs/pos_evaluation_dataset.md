@@ -34,6 +34,15 @@ counts were obtained solely by the acquisition validator:
 | Answers / email / newsgroup / reviews / weblog | 5,278 / 5,761 / 3,695 / 5,347 / 4,494 |
 | Contiguous, strong, length-2+ STREUSLE final MWE spans | 229 |
 
+The STREUSLE development file contains 554 sentences and 5,396 tokens. The
+same frozen train-before-dev deduplication excludes eight 30-token duplicate
+sentences, leaving the manifest's 192 documents, 546 sentences, 5,366 tokens,
+and 23 in-scope spans. The excluded sentence IDs are
+`reviews-014483-0001`, `reviews-014629-0002`, `reviews-022900-0003`,
+`reviews-194313-0005`, `reviews-198455-0001`, `reviews-243369-0001`,
+`reviews-280170-0003`, and `reviews-356361-0004`. None changes the frozen
+23-span development denominator.
+
 The source split contains duplicate normalized sentences, which would violate
 the quality contract's no-cross-split-leakage rule. The frozen adapter keeps
 the first NFC token sequence by train, then dev, then final precedence; it

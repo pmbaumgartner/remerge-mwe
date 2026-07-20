@@ -73,7 +73,7 @@
         "span_policy": "exact_two_tokens_matching_filter_patterns",
         "minimum_in_scope_spans": 1,
         "expected_spans": 23,
-        "expected_unretained_sentences": 0,
+        "expected_unretained_sentences": 8,
         "expected_documents": 192,
         "expected_sentences": 546,
         "expected_tokens": 5366
