@@ -67,6 +67,12 @@ UPOS = frozenset(
 )
 RETAINED_C2_ACCURACY = 0.937691
 RETAINED_C2_TOLERANCE = 0.000_001
+RETAINED_C2_TRAIN_SHA256 = (
+    "e6a3784727e7726d4f1c2e10ff22dcd0ddeb8869ad6f85b73bb1ff5ef798e944"
+)
+RETAINED_C2_DEV_SHA256 = (
+    "ef962ac05d844eaff46eeded125937129bfc0876d43963d66810cb73ffa8f5df"
+)
 
 Boundaries = tuple[tuple[tuple[str, ...], ...], ...]
 Predictions = tuple[tuple[tuple[str, ...], ...], ...]
@@ -472,6 +478,28 @@ def _measurement(values: list[float]) -> dict[str, float | list[float]]:
     }
 
 
+def warm_inference_measurements(
+    candidate: Candidate,
+    inputs: Boundaries,
+    expected: Predictions,
+) -> dict[str, float | list[float]]:
+    """Time only inference while rejecting stateful or malformed later output."""
+
+    for _ in range(3):
+        actual = validate_predictions(inputs, candidate.tag(inputs))
+        if actual != expected:
+            raise RejectedEvaluation("candidate predictions changed during warmup")
+    timings: list[float] = []
+    for _ in range(15):
+        started = perf_counter()
+        raw = candidate.tag(inputs)
+        timings.append(perf_counter() - started)
+        actual = validate_predictions(inputs, raw)
+        if actual != expected:
+            raise RejectedEvaluation("candidate predictions changed during measurement")
+    return _measurement(timings)
+
+
 def isolated_load_measurements(
     specification: str, expected_artifact_sha256: str
 ) -> dict[str, Any]:
@@ -483,11 +511,12 @@ def isolated_load_measurements(
         "import hashlib,importlib,json,resource,sys,time; "
         "before=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss; "
         "started=time.perf_counter(); candidate=getattr(importlib.import_module(sys.argv[1]),sys.argv[2])(); "
+        "elapsed=time.perf_counter()-started; "
         "after=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss; "
         "actual=hashlib.sha256(candidate.artifact_path.read_bytes()).hexdigest(); "
         "assert actual==candidate.artifact_sha256; "
         'unit=1 if sys.platform=="darwin" else 1024; '
-        'print(json.dumps({"seconds":time.perf_counter()-started,"incremental_peak_rss_bytes":max(0,after-before)*unit,"artifact_sha256":actual}))'
+        'print(json.dumps({"seconds":elapsed,"incremental_peak_rss_bytes":max(0,after-before)*unit,"artifact_sha256":actual}))'
     )
     samples = []
     for _ in range(15):
@@ -599,13 +628,9 @@ def evaluate(
     checked = validate_predictions(
         development_boundaries, candidate.tag(development_boundaries)
     )
-    for _ in range(3):
-        candidate.tag(development_boundaries)
-    timings = []
-    for _ in range(15):
-        point = perf_counter()
-        candidate.tag(development_boundaries)
-        timings.append(perf_counter() - point)
+    warm = warm_inference_measurements(
+        candidate, development_boundaries, checked
+    )
     metrics = quality_metrics(train, dev_sentences, checked)
     configuration = manifest["filter_configuration"]
     if not isinstance(configuration, dict):
@@ -615,7 +640,6 @@ def evaluate(
         dev_mwe, mwe_predictions, candidate.model_id, configuration
     )
     gates = dev_analog_gates(metrics, utility)
-    warm = _measurement(timings)
     resources = isolated_load_measurements(
         specification, candidate.artifact_sha256
     )
@@ -670,6 +694,16 @@ def reproduce_retained_c2(
     train: Path, dev: Path, output: Path, report: Path
 ) -> dict[str, Any]:
     """Run the retained c2 trainer unchanged and reject a non-reproducing result."""
+    train_digest = _sha(train)
+    dev_digest = _sha(dev)
+    if train_digest != RETAINED_C2_TRAIN_SHA256:
+        raise RejectedEvaluation(
+            "retained c2 reproduction requires the pinned training split"
+        )
+    if dev_digest != RETAINED_C2_DEV_SHA256:
+        raise RejectedEvaluation(
+            "retained c2 reproduction requires the pinned development split"
+        )
     trainer = Path(__file__).parents[1] / "pos-linear" / "train.py"
     command = [
         sys.executable,

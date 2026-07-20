@@ -86,7 +86,9 @@ It invokes the isolated `experiments/pos-linear/train.py` with c2's retained
 seed, epoch count, and bucket count, then rejects any result outside the
 documented 93.7691% deterministic tolerance.  This is reproducibility
 evidence for a rejected experiment, not a production adapter or a final-split
-evaluation.
+evaluation. Before invoking the trainer, the command requires the exact pinned
+train and development SHA-256 values above; an arbitrary path, including the
+protected split, is rejected before any model or report is produced.
 
 The pinned acquisition reproduced c2 on 2026-07-19 at
 `0.9376913594973956` development accuracy.  Its train/dev SHA-256 values were

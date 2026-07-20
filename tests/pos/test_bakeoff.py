@@ -182,6 +182,42 @@ def test_common_command_has_no_final_split_option() -> None:
     assert 'add_argument("--final"' not in MODULE_PATH.read_text(encoding="utf-8")
 
 
+def test_c2_reproduction_rejects_unpinned_inputs_before_training(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    train = tmp_path / "train.conllu"
+    dev = tmp_path / "dev.conllu"
+    train.write_text("not the pinned train split", encoding="utf-8")
+    dev.write_text("not the pinned dev split", encoding="utf-8")
+    monkeypatch.setattr(
+        bakeoff.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("trainer must not run"),
+    )
+
+    with pytest.raises(bakeoff.RejectedEvaluation, match="pinned training split"):
+        bakeoff.reproduce_retained_c2(
+            train, dev, tmp_path / "artifact", tmp_path / "report"
+        )
+
+
+def test_warm_measurement_rejects_stateful_candidate_output() -> None:
+    class StatefulCandidate(_Candidate):
+        calls = 0
+
+        def tag(self, documents: bakeoff.Boundaries) -> bakeoff.Predictions:
+            self.calls += 1
+            tag = "NOUN" if self.calls == 1 else "VERB"
+            return (((tag,),),)
+
+    candidate = StatefulCandidate()
+    inputs = ((("word",),),)
+    expected = candidate.tag(inputs)
+
+    with pytest.raises(bakeoff.RejectedEvaluation, match="changed during warmup"):
+        bakeoff.warm_inference_measurements(candidate, inputs, expected)
+
+
 def test_c2_adapter_parses_and_predicts_a_tiny_golden_artifact(tmp_path: Path) -> None:
     adapter_path = MODULE_PATH.with_name("c2_adapter.py")
     adapter_spec = importlib.util.spec_from_file_location(
