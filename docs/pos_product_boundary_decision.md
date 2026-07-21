@@ -1,15 +1,15 @@
 ---
 kata: c1sh
 created: 2026-07-20
-status: awaiting-human-decision
+status: decided-b2
 ---
 
 # POS product-boundary decision
 
-This is the final Human gate for outcome `v4a2`. It does not revisit P1+D1,
-weaken a quality threshold, inspect protected final, or authorize a third
-pilot. It decides what product/package boundary follows the completed pilot
-portfolio.
+This Human gate reshapes outcome `v4a2` around a separate workspace package.
+It does not revisit P1+D1, silently weaken the existing REMERGE quality
+contract, inspect protected final, or authorize new training data. It decides
+what product/package boundary follows the completed pilot portfolio.
 
 ## Portfolio evidence
 
@@ -34,29 +34,59 @@ for qualification.
 
 ## Boundary options
 
-- **B0 — Stop at experimental evidence (recommended).** Retire both artifacts
+- **B0 — Stop at experimental evidence.** Retire both artifacts
   as attributable negative evidence. Create no qualification, integration,
   exposure, packaging, or release work.
 - **B1 — Internal REMERGE module.** This cannot promote either rejected
   artifact. It would require a separately authorized architecture/data cycle
   before a candidate could return to this gate.
-- **B2 — Separate workspace package.** There is no eligible capability to
-  package, so this adds a boundary without a qualifying product.
+- **B2 — Separate workspace package.** Treat generic POS tagging as an
+  independently useful capability, with its own package boundary and
+  qualification contract.
 - **B3 — Independent project plus REMERGE adapter.** There is likewise no
   eligible capability; this also triggers a Core-to-Extended delivery-profile
   review.
 
-## Recommendation
-
-Select **B0**. It follows the root stop conditions: two complementary
-sequence-aware architectures produced no credible downstream MWE improvement
-and neither satisfied the frozen qualification prerequisites. D1 also means
-there is no authorized data/teacher branch to continue. Stopping closes the
-outcome honestly without observing final or preserving a non-qualifying
-integration surface.
-
 ## Human decision record
 
-Awaiting Peter's selection. The decision must state whether any protected
-qualification, integration, exposure, packaging, or release work is
-authorized. Under B0, all are explicitly unauthorized.
+Peter selected **B2** on 2026-07-20 and selected the averaged structured
+perceptron as the initial architecture. His rationale is:
+
+- The perceptron's result is very close to the 95% benchmark, and 95% is too
+  arbitrary to decide whether an independently useful generic POS tagger
+  deserves a package.
+- A generic POS tagger is useful independently of MWE discovery. Isolating it
+  in a workspace package gives it a stable place for continued improvement.
+- MWE performance is a separate concern, and the current MWE evaluation is
+  too small and too dependent on one dataset to serve as the standalone POS
+  package's acceptance oracle.
+
+This decision authorizes a Core delivery phase that defines a new standalone
+POS acceptance contract, extracts the averaged-perceptron implementation into
+a separately installable workspace package, and qualifies that package against
+the new contract. The old 95% overall, 82% OOV, downstream MWE, and 50,000
+token/s gates remain historical and authoritative for the stopped built-in
+REMERGE route until a Human explicitly changes that route; B2 does not waive
+them.
+
+The decision does **not** authorize observing protected final, adding a corpus,
+teacher, pseudo-label, or augmentation branch, making the package a mandatory
+REMERGE dependency, automatically downloading a model, publishing a stable or
+prerelease artifact, or exposing generated tags through REMERGE. Those actions
+remain behind explicit provenance, qualification, and Human exposure gates.
+
+The delivery profile remains **Core**: one repository, one separately
+installable workspace package, and one accountable maintainer. Moving the
+package to an independent repository or adding broader organizational release
+coordination requires a fresh profile review.
+
+## Follow-up ledger
+
+The B2 work is tracked by child issues of `v4a2`, in dependency order:
+
+1. `hzrh` — freeze the standalone package contract and qualification gates.
+2. `4gt3` — add the averaged-perceptron workspace package.
+3. `88xq` — add and run the standalone qualification harness.
+4. `cp7t` — hold a Human gate for prerelease and optional REMERGE exposure.
+5. `pnd7` — add an optional REMERGE adapter only if that gate authorizes it.
+6. `dr0g` — publish a prerelease only if that gate authorizes it.
