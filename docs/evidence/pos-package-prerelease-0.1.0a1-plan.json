@@ -1,0 +1,46 @@
+{
+  "assets": {
+    "model": {
+      "bytes": 1525432,
+      "filename": "remerge-pos-en-ewt-0.1.0a1.tar.gz",
+      "sha256": "fa37f77004cf0c4218c2e8999240ddc0fc21b4a05f266b75285c1f71525c583b"
+    },
+    "sdist": {
+      "bytes": 9851,
+      "filename": "remerge_pos-0.1.0a1.tar.gz",
+      "sha256": "f60c6ca9c1c3a1a19c05106c498ca5dcd16661e8809017fe379847d484701fcc"
+    },
+    "wheel": {
+      "bytes": 11889,
+      "filename": "remerge_pos-0.1.0a1-py3-none-any.whl",
+      "sha256": "1a78f798f2f3fad0beadff699aa01b6362f5a8cc7e0ba0b7355701a5154de248"
+    }
+  },
+  "channel": "GitHub prerelease",
+  "code_compatibility": "remerge-pos==0.1.0a1",
+  "created_at": "2026-07-21T02:08:08Z",
+  "model_distribution": "remerge-pos-en-ewt-0.1.0a1",
+  "model_id": "remerge-pos-structured-perceptron-v1",
+  "notes": {
+    "bytes": 4049,
+    "filename": "docs/pos_package_prerelease.md",
+    "sha256": "fac263459db136a260d4a065a99bd7a617f9fb03728d4b0565637228c9a40b4a"
+  },
+  "publication_controls": {
+    "archive_before_withdrawal": true,
+    "draft_before_public": true,
+    "download_by_asset_id": true,
+    "public_only_after_download_verification": true,
+    "remote_tag_must_equal_target_commit": true
+  },
+  "qualified_source_revision": "47ab7cb3060d0319d71e02ed4be0afcca6f2d95a",
+  "reproducibility": {
+    "byte_identical": true,
+    "isolated_builds": 2,
+    "source_date_epoch": 1784597194
+  },
+  "schema_version": 1,
+  "tag": "remerge-pos-v0.1.0a1",
+  "target_commit": "53ffffb78813a00d7a58a668a821334b67bd0f2a",
+  "version": "0.1.0a1"
+}
