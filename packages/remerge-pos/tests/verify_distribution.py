@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import argparse
 from email.parser import BytesParser
+import hashlib
 from pathlib import Path
 import tarfile
+import tomllib
 import zipfile
 
 
 PACKAGE = Path(__file__).parents[1]
-VERSION = "0.1.0"
+VERSION = tomllib.loads((PACKAGE / "pyproject.toml").read_text(encoding="utf-8"))[
+    "project"
+]["version"]
 WHEEL_PREFIX = f"remerge_pos-{VERSION}.dist-info"
 SDIST_PREFIX = f"remerge_pos-{VERSION}"
 MODULE_FILES = {
@@ -19,6 +23,16 @@ MODULE_FILES = {
     "remerge_pos/_perceptron.py",
     "remerge_pos/training.py",
 }
+QUALIFIED_MODULE_SHA256 = {
+    "remerge_pos/__init__.py": "41c0f80ebd1edc3ce7383194cc808e556bd50625dc7d2a5ab6bb440e7651ea54",
+    "remerge_pos/_api.py": "4ed92b85f64d03420b235bce674100a124181f10017b38623d25cf67a6887d50",
+    "remerge_pos/_perceptron.py": "6edfbf3e806dda4d3717dfb2f84a6c973552e416f91048c5f099402d0bd9f17a",
+    "remerge_pos/training.py": "b627623bc118e6396e2d21364e1eb4a892a4a003f95d32d1802f2d5184c525b8",
+}
+
+
+def _sha256(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
 
 
 def _files(names: list[str]) -> set[str]:
@@ -50,6 +64,9 @@ def verify_wheel(path: Path) -> None:
             != (PACKAGE / "LICENSE").read_bytes()
         ):
             raise RuntimeError("wheel license does not match the package license")
+        for name, expected_sha256 in QUALIFIED_MODULE_SHA256.items():
+            if _sha256(archive.read(name)) != expected_sha256:
+                raise RuntimeError(f"wheel module differs from Q1: {name}")
 
 
 def verify_sdist(path: Path) -> None:
@@ -72,6 +89,10 @@ def verify_sdist(path: Path) -> None:
             or license_member.read() != (PACKAGE / "LICENSE").read_bytes()
         ):
             raise RuntimeError("sdist license does not match the package license")
+        for name, expected_sha256 in QUALIFIED_MODULE_SHA256.items():
+            member = archive.extractfile(f"{SDIST_PREFIX}/src/{name}")
+            if member is None or _sha256(member.read()) != expected_sha256:
+                raise RuntimeError(f"sdist module differs from Q1: {name}")
 
 
 def main() -> None:

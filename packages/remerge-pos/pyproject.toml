@@ -1,12 +1,16 @@
 [project]
 name = "remerge-pos"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Experimental English UPOS tagging package."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = []
+
+[project.urls]
+Repository = "https://github.com/pmbaumgartner/remerge-mwe"
+Qualification = "https://github.com/pmbaumgartner/remerge-mwe/blob/remerge-pos-v0.1.0a1/docs/pos_package_qualification.md"
 
 [build-system]
 requires = ["uv_build>=0.11,<0.12"]

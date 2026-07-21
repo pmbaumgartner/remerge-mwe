@@ -4,6 +4,25 @@
 tagging. Its first model claim is deliberately narrow: an experimental English
 UPOS model trained and evaluated on UD English EWT.
 
+## Experimental prerelease
+
+The first public exposure is GitHub prerelease `remerge-pos-v0.1.0a1`. The MIT
+code wheel/sdist and CC BY-SA EWT model are distinct distributions:
+
+```text
+https://github.com/pmbaumgartner/remerge-mwe/releases/tag/remerge-pos-v0.1.0a1
+```
+
+Install the code wheel from that release, download and verify
+`remerge-pos-en-ewt-0.1.0a1.tar.gz`, then load its `model.rmsp` from an explicit
+local path. The release page publishes SHA-256 checksums and the model archive
+contains its own license, attribution, manifest, and model card.
+
+This is not a stable release or a broad-English claim. It has no raw-text
+tokenizer, confidence API, automatic model download, or REMERGE adapter. The
+qualified evidence covers caller-tokenized English web text from UD English
+EWT; MWE behavior was not a package gate.
+
 ## Inference boundary
 
 The stable inference boundary is tokenized sentences, not raw text. Callers
