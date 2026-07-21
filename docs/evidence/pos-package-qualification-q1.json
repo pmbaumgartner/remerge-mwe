@@ -1,0 +1,143 @@
+{
+  "candidate": {
+    "artifact_bytes": 1515159,
+    "artifact_sha256": "a394204c44c737ba9c60cc135b3176f5f86bd5728fd0ad68c5fe156384ee748d",
+    "config": {
+      "epochs": 6,
+      "feature_buckets": 131072,
+      "feature_cutoff": 1
+    },
+    "model_id": "remerge-pos-structured-perceptron-v1",
+    "package": "remerge-pos==0.1.0",
+    "seed": 20260720
+  },
+  "data_hashes": {
+    "dev": "ef962ac05d844eaff46eeded125937129bfc0876d43963d66810cb73ffa8f5df",
+    "final": "465100c5b6fb606725068dc70680d65cc047fbb4ae25195375618bc6353a4e58",
+    "train": "e6a3784727e7726d4f1c2e10ff22dcd0ddeb8869ad6f85b73bb1ff5ef798e944"
+  },
+  "development_quality": {
+    "ambiguous_accuracy": 0.9394268851440553,
+    "macro_f1": 0.9093299376922143,
+    "oov_accuracy": 0.7842652152399802,
+    "overall_accuracy": 0.9413423575860124,
+    "token_count": 24822
+  },
+  "distribution": {
+    "model_or_corpus_data_present": false,
+    "sdist": {
+      "file_count": 8,
+      "sha256": "764dfde1c66b40a8d3a639565db539fd9bddc732be7e50d36e3c43e2ae426e23"
+    },
+    "wheel": {
+      "file_count": 8,
+      "sha256": "d15afc0c0f231e5448cdc40f521fcc5ee2b665ed1e545010e63a8c95c8ba5284"
+    }
+  },
+  "environment": {
+    "platform": "macOS-14.5-arm64-arm-64bit",
+    "python": "3.12.0"
+  },
+  "hard_gates": {
+    "api_alignment": "pass",
+    "artifact_safety": "pass",
+    "determinism": "pass",
+    "distribution": "pass",
+    "extraction_parity": "pass",
+    "performance": "pass",
+    "reproducible_export": "pass",
+    "root_compatibility": "pass"
+  },
+  "limitations": [
+    "EWT is English web-domain evidence, not unrestricted English.",
+    "Q1 defines no post-hoc numerical quality floor.",
+    "MWE behavior was not evaluated and is not a standalone-package gate.",
+    "Publication and REMERGE exposure remain Human decisions."
+  ],
+  "negative_controls": {
+    "api_and_alignment_rejected": 17,
+    "artifact_mutations_rejected": 13,
+    "corpus_leak_rejected": true,
+    "deliberately_slowed_performance_rejected": true,
+    "missing_license_rejected": true,
+    "network_denied_import_passed": true
+  },
+  "performance": {
+    "cold_load_iqr_over_median": 0.09300442466760442,
+    "cold_load_median_seconds": 0.17669858294539154,
+    "dev_inference_iqr_over_median": 0.07516501046157012,
+    "dev_tokens_per_second": 9428.343822648689,
+    "maximum_incremental_peak_rss_bytes": 69402624,
+    "minimum_tokens_per_second": 7300.183862207118,
+    "reference_tokens_per_second": 8111.315402452354
+  },
+  "protected_final": {
+    "attempted": true,
+    "candidate_minus_c2": {
+      "ambiguous_accuracy": 0.0039135879774577775,
+      "macro_f1": 0.02962027029421277,
+      "oov_accuracy": 0.02809243316719534,
+      "overall_accuracy": 0.006266531027466993
+    },
+    "candidate_quality": {
+      "ambiguous_accuracy": 0.9467752035065748,
+      "ambiguous_token_count": 12776,
+      "macro_f1": 0.923571639774342,
+      "oov_accuracy": 0.7879474399637517,
+      "oov_token_count": 2207,
+      "overall_accuracy": 0.9426246185147508,
+      "per_domain_accuracy": {
+        "answers": 0.9234558544903373,
+        "email": 0.9480992883180004,
+        "newsgroup": 0.9301759133964818,
+        "reviews": 0.9510005610622779,
+        "weblog": 0.9583889630618603
+      },
+      "per_upos_f1": {
+        "ADJ": 0.9098242581388649,
+        "ADP": 0.953665113998529,
+        "ADV": 0.9010487916096671,
+        "AUX": 0.9753168779186124,
+        "CCONJ": 0.9925017041581459,
+        "DET": 0.9882854100106496,
+        "INTJ": 0.8981481481481481,
+        "NOUN": 0.9116336633663367,
+        "NUM": 0.9402985074626866,
+        "PART": 0.9754977029096478,
+        "PRON": 0.984514312529329,
+        "PROPN": 0.8564580559254328,
+        "PUNCT": 0.9937489440783916,
+        "SCONJ": 0.8438228438228438,
+        "SYM": 0.8392857142857143,
+        "VERB": 0.946968256985364,
+        "X": 0.7896995708154506
+      },
+      "token_count": 24575
+    },
+    "c2_quality": {
+      "ambiguous_accuracy": 0.9428616155291171,
+      "macro_f1": 0.8939513694801292,
+      "oov_accuracy": 0.7598550067965564,
+      "overall_accuracy": 0.9363580874872838,
+      "token_count": 24575
+    },
+    "evaluated": true,
+    "paired_correctness": {
+      "both_correct": 22652,
+      "both_wrong": 1051,
+      "c2_only_correct": 359,
+      "candidate_only_correct": 513
+    },
+    "role": "required diagnostic for cp7t; no Q1 quality floor"
+  },
+  "report_hashes": {
+    "consumption_marker_sha256": "aa2d60da20da85313c9acc1ba13a87fa6db29f6279240ca7df90c87c17342f2f",
+    "development_report_sha256": "7c944ca4958b2ba9b0939c07d8fd7928ff8736a96fa964f80468d3f7e2539104",
+    "final_report_sha256": "e0365d308455ca86216dc0980ed30bab03c47d9822d28d0b74809361f52a5604",
+    "registration_sha256": "f7fb9d1f86af17c9d44909e487298cee2c6f767b0183dac6067ff5afac6d5368"
+  },
+  "schema_version": 1,
+  "source_revision": "47ab7cb3060d0319d71e02ed4be0afcca6f2d95a",
+  "status": "accepted",
+  "timestamp": "2026-07-21T01:32:37.515311+00:00"
+}
