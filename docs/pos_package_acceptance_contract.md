@@ -1,7 +1,7 @@
 ---
 kata: hzrh
 created: 2026-07-20
-status: awaiting-human-decision
+status: decided-q1
 ---
 
 # Standalone POS package acceptance contract
@@ -277,13 +277,36 @@ invalidates that registration and requires rerunning all affected evidence; a
 change informed by final results requires a newly frozen independent final
 set for another quality claim.
 
-## Decision needed
+## Decision record
 
-- **Q1:** qualify faithful, safe experimental packaging; reserve quality
-  adequacy and publication for `cp7t`.
-- **Q2:** add comparative final-quality rejection against c2.
-- **Q3:** retain the old absolute built-in/MWE contract.
-- **Recommendation:** Q1, because it implements B2 without replacing 95% with
-  another post-hoc number or letting the small MWE set govern standalone POS.
+Peter selected **Q1** on 2026-07-20. The contract above is now frozen for
+`4gt3` and `88xq`.
 
-Peter's choice is required before this contract is frozen and `4gt3` starts.
+**Finding:** The existing evidence can reliably detect whether package
+extraction changes the chosen model or creates unsafe, unreproducible, or
+uninstallable artifacts. It cannot justify a new absolute English-quality
+threshold or make the current 23-span MWE development set representative of
+standalone POS value.
+
+**Decision:** Qualify faithful, safe experimental packaging. EWT development
+and one registered protected-final run remain mandatory evidence, but their
+quality values are diagnostics for `cp7t`, not post-hoc hard gates. MWE quality
+does not gate the standalone package.
+
+**Recommendation:** Proceed to `4gt3`, then use `88xq` to implement this oracle
+and produce the evidence required by the later Human exposure decision.
+
+**Confidence:** Medium-high for the package-merge boundary. Exact parity,
+artifact safety, packaging, provenance, and resource regression are directly
+observable. Confidence about public usefulness remains intentionally deferred
+until the protected quality report exists.
+
+**Rejected alternatives:** Q2 uses another rejected research model as the
+quality yardstick and can over-interpret small point differences. Q3 would
+reverse B2 by retaining the unrelated built-in/MWE gate.
+
+**What would change this decision:** An independently approved representative
+English evaluation set and product-derived error budget can establish a future
+numeric quality gate. If protected final has already been observed, such a
+change also requires a newly frozen independent final set before another
+quality claim.
