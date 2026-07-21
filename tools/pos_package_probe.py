@@ -20,11 +20,16 @@ from remerge_pos.training import (
 
 
 def _measurement(values: list[float]) -> dict[str, Any]:
+    if not values:
+        raise ValueError("measurement requires at least one sample")
     ordered = sorted(values)
     median = statistics.median(ordered)
-    lower = ordered[: len(ordered) // 2]
-    upper = ordered[(len(ordered) + 1) // 2 :]
-    iqr = statistics.median(upper) - statistics.median(lower)
+    if len(ordered) == 1:
+        iqr = 0.0
+    else:
+        lower = ordered[: len(ordered) // 2]
+        upper = ordered[(len(ordered) + 1) // 2 :]
+        iqr = statistics.median(upper) - statistics.median(lower)
     return {
         "seconds": values,
         "median_seconds": median,

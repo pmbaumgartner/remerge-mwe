@@ -295,6 +295,11 @@ def test_probe_measurement_and_prediction_validation() -> None:
         "median_seconds": 2.5,
         "iqr_over_median": 0.8,
     }
+    assert probe._measurement([0.25]) == {
+        "seconds": [0.25],
+        "median_seconds": 0.25,
+        "iqr_over_median": 0.0,
+    }
     assert probe._validate_predictions((("one", "two"),), (("NOUN", "VERB"),)) == (
         ("NOUN", "VERB"),
     )
