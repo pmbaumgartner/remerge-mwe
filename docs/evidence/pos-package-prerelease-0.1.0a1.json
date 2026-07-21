@@ -1,0 +1,87 @@
+{
+  "assets": {
+    "model": {
+      "api_url": "https://api.github.com/repos/pmbaumgartner/remerge-mwe/releases/assets/484138517",
+      "bytes": 1525432,
+      "filename": "remerge-pos-en-ewt-0.1.0a1.tar.gz",
+      "github_id": "RA_kwDOIGfWTM4c214V",
+      "sha256": "fa37f77004cf0c4218c2e8999240ddc0fc21b4a05f266b75285c1f71525c583b"
+    },
+    "sdist": {
+      "api_url": "https://api.github.com/repos/pmbaumgartner/remerge-mwe/releases/assets/484138518",
+      "bytes": 9851,
+      "filename": "remerge_pos-0.1.0a1.tar.gz",
+      "github_id": "RA_kwDOIGfWTM4c214W",
+      "sha256": "f60c6ca9c1c3a1a19c05106c498ca5dcd16661e8809017fe379847d484701fcc"
+    },
+    "wheel": {
+      "api_url": "https://api.github.com/repos/pmbaumgartner/remerge-mwe/releases/assets/484138516",
+      "bytes": 11889,
+      "filename": "remerge_pos-0.1.0a1-py3-none-any.whl",
+      "github_id": "RA_kwDOIGfWTM4c214U",
+      "sha256": "1a78f798f2f3fad0beadff699aa01b6362f5a8cc7e0ba0b7355701a5154de248"
+    }
+  },
+  "authorization": {
+    "decision": "E1",
+    "decision_commit": "32ef99d2415b2c5fe2df3880dbbbf1d0579f3818",
+    "scope": "standalone experimental GitHub prerelease only"
+  },
+  "build": {
+    "byte_identical": true,
+    "isolated_builds": 2,
+    "qualified_runtime_revision": "47ab7cb3060d0319d71e02ed4be0afcca6f2d95a",
+    "report_sha256": "e05108f8b567ef92d084195122f9502e37e1a0b3a0f92cd8c83d7feb0816a589",
+    "source_date_epoch": 1784597194,
+    "target_commit": "53ffffb78813a00d7a58a668a821334b67bd0f2a"
+  },
+  "controller_revision": "1148af6e0dd52b9a4dc64bb208d76013a79ec671",
+  "gates": {
+    "anonymous_public_download_verification": "pass",
+    "archive_member_and_metadata_safety": "pass",
+    "committed_notes_and_asset_manifest": "pass",
+    "draft_download_by_asset_id": "pass",
+    "draft_title_body_and_asset_snapshot": "pass",
+    "model_license_attribution_and_provenance": "pass",
+    "network_denied_import": "pass",
+    "post_publication_reconciliation": "pass",
+    "qualified_model_api_smoke": "pass",
+    "remote_tag_exact_target": "pass",
+    "repository_nonperformance_tests": "153 passed, 2 deselected",
+    "sdist_clean_install_and_module_parity": "pass",
+    "wheel_clean_install_and_module_parity": "pass"
+  },
+  "licensing": {
+    "code_distributions": "MIT",
+    "model_distribution": "CC BY-SA 4.0",
+    "raw_corpus_or_gold_in_assets": false,
+    "separate_distributions": true
+  },
+  "model_payload": {
+    "bytes": 1515159,
+    "model_id": "remerge-pos-structured-perceptron-v1",
+    "sha256": "a394204c44c737ba9c60cc135b3176f5f86bd5728fd0ad68c5fe156384ee748d"
+  },
+  "prepublication_manifest": "docs/evidence/pos-package-prerelease-0.1.0a1-plan.json",
+  "release": {
+    "api_url": "https://api.github.com/repos/pmbaumgartner/remerge-mwe/releases/357077909",
+    "is_draft": false,
+    "is_prerelease": true,
+    "release_notes_bytes": 4049,
+    "release_notes_sha256": "fac263459db136a260d4a065a99bd7a617f9fb03728d4b0565637228c9a40b4a",
+    "tag": "remerge-pos-v0.1.0a1",
+    "target_commit": "53ffffb78813a00d7a58a668a821334b67bd0f2a",
+    "url": "https://github.com/pmbaumgartner/remerge-mwe/releases/tag/remerge-pos-v0.1.0a1"
+  },
+  "report_hashes": {
+    "anonymous_public_verification": "8d989444d4e446b4bd8270c6e4c5c489f1d43356d0f4ee668a6af1791e88d3fd",
+    "draft_verification": "2dbbcfabb45536508e607d3d5b73f13c451a6664691f7ce1aa257de3d395b5f4",
+    "local_plan_verification": "6482c1cf0158352001e366f36801ff240cc2c5e12b074f0492d1e307ba0a5251",
+    "post_publication_status": "ba3d317363cb8b3718a22f4d3e71c2f787f3455014e40e5405f863e585d99469",
+    "publication": "788445f7890b8e0b6712479c4324393d58eb9197d3490c203566be641e4dfd3d"
+  },
+  "schema_version": 1,
+  "status": "published",
+  "timestamp": "2026-07-21T02:11:01.734043+00:00",
+  "version": "0.1.0a1"
+}
