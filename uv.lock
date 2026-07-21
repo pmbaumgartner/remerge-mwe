@@ -2,6 +2,12 @@ version = 1
 revision = 3
 requires-python = ">=3.12"
 
+[manifest]
+members = [
+    "remerge-mwe",
+    "remerge-pos",
+]
+
 [[package]]
 name = "colorama"
 version = "0.4.6"
@@ -278,6 +284,11 @@ dev = [
     { name = "ruff", specifier = ">=0.9,<1" },
     { name = "ty", specifier = ">=0.0.1a16" },
 ]
+
+[[package]]
+name = "remerge-pos"
+version = "0.1.0"
+source = { editable = "packages/remerge-pos" }
 
 [[package]]
 name = "ruff"

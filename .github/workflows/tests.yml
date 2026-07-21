@@ -18,20 +18,30 @@ jobs:
         with:
           path: ~/.cache/uv
           key: uv-${{ runner.os }}-py312-${{ hashFiles('**/uv.lock') }}
-      - run: uv sync --all-groups --frozen
+      - run: uv sync --all-groups --all-packages --frozen
       - run: uv run --no-sync prek run --all-files
+      - run: uv run --package remerge-pos --no-sync pytest -q packages/remerge-pos/tests
       - run: cargo check
       - run: cargo fmt --all -- --check
       - run: cargo test
       - run: uv run --with maturin maturin develop
       - run: uv run --no-sync pytest -q tests/test_smoke.py
       - run: uv build --wheel --no-sources
+      - run: uv build --package remerge-pos --wheel --sdist --out-dir dist/remerge-pos
+      - run: uv run --no-sync python packages/remerge-pos/tests/verify_distribution.py dist/remerge-pos/remerge_pos-*.whl dist/remerge-pos/remerge_pos-*.tar.gz
       - run: |
           python -m venv .wheel-smoke
           . .wheel-smoke/bin/activate
           pip install --upgrade pip
           pip install dist/remerge_mwe-*.whl
           python -c "import remerge; assert callable(remerge.run); assert remerge.run(['a b'], 1, method='frequency')[0].merged_lexeme.word == ('a', 'b')"
+          pip install dist/remerge-pos/remerge_pos-*.whl
+          python packages/remerge-pos/tests/packaging_smoke.py
+      - run: |
+          python -m venv .pos-sdist-smoke
+          . .pos-sdist-smoke/bin/activate
+          pip install dist/remerge-pos/remerge_pos-*.tar.gz
+          python packages/remerge-pos/tests/packaging_smoke.py
       - run: uv run --no-sync pytest -v -m "not performance" --cov=src/remerge --cov-report=term-missing --cov-report=xml --cov-fail-under=95
       - uses: actions/upload-artifact@v4
         with:

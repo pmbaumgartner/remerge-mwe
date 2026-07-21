@@ -21,6 +21,9 @@ dev = [
     "hypothesis>=6",
 ]
 
+[tool.uv.workspace]
+members = ["packages/remerge-pos"]
+
 [tool.maturin]
 python-source = "src"
 module-name = "remerge._core"

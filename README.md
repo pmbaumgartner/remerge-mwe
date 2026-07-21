@@ -207,7 +207,7 @@ This project uses `uv`, `ruff`, and `ty`.
 
 ```bash
 # Sync environment
-uv sync --all-groups
+uv sync --all-groups --all-packages
 
 # Install the commit hook once per clone
 uv run --no-sync prek install
@@ -220,6 +220,9 @@ uv run --no-sync prek run --all-files
 
 # Python tests
 uv run --no-sync pytest -v -m "not performance"
+
+# Standalone POS workspace-package tests
+uv run --package remerge-pos --no-sync pytest -q packages/remerge-pos/tests
 
 # Opt-in reference-corpus performance guard
 REMERGE_PERF_GUARD=1 uv run --no-sync pytest -q tests/performance/test_runtime.py
@@ -234,6 +237,10 @@ uv run --no-sync maturin develop
 ## Releasing (maintainers)
 
 Releases are automated by `.github/workflows/release.yml`.
+
+That workflow publishes only `remerge-mwe`. The experimental `remerge-pos`
+workspace member is not published until its separate qualification and Human
+exposure gates authorize a prerelease.
 
 At a minimum:
 1. Keep `pyproject.toml` and `Cargo.toml` versions aligned.

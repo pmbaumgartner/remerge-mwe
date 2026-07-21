@@ -8,8 +8,11 @@ import itertools
 from pathlib import Path
 import stat
 import sys
+from typing import Any
 
 import pytest
+
+from remerge_pos import _perceptron as perceptron
 
 
 ROOT = Path(__file__).parents[2]
@@ -25,9 +28,6 @@ def _module(name: str, path: Path):
     return module
 
 
-perceptron = _module(
-    "pos_structured_perceptron_test", PILOT / "structured_perceptron.py"
-)
 evaluator = _module("pos_structured_perceptron_evaluate_test", PILOT / "evaluate.py")
 bakeoff = _module(
     "pos_structured_perceptron_bakeoff_test", ROOT / "experiments/pos-tagger/bakeoff.py"
@@ -42,8 +42,8 @@ DATA = (
 )
 
 
-def _empty_model(**changes):
-    values = {
+def _empty_model(**changes: Any):
+    values: dict[str, Any] = {
         "config": CONFIG,
         "seed": 1,
         "steps": 1,
