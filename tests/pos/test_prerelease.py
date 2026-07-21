@@ -378,3 +378,23 @@ def test_github_release_requires_exact_draft_state_and_asset_set() -> None:
     release["body"] = "changed release notes\n"
     with pytest.raises(prerelease.ReleaseError):
         prerelease._release_assets(release, plan, draft=True)
+
+
+def test_release_notes_accept_repository_relative_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "checkout"
+    notes = root / "docs/pos_package_prerelease.md"
+    notes.parent.mkdir(parents=True)
+    notes.write_text("frozen notes\n", encoding="utf-8")
+    monkeypatch.setattr(prerelease, "ROOT", root)
+    plan = {
+        "notes": {
+            "filename": "docs/pos_package_prerelease.md",
+            "sha256": prerelease._sha(notes),
+            "bytes": notes.stat().st_size,
+        }
+    }
+
+    monkeypatch.chdir(root)
+    prerelease._verify_notes(plan, Path("docs/pos_package_prerelease.md"))

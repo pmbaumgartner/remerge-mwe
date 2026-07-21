@@ -864,10 +864,11 @@ def _verify_plan(plan_path: Path, assets: Mapping[str, Path]) -> dict[str, Any]:
 
 
 def _verify_notes(plan: Mapping[str, Any], path: Path) -> None:
+    resolved = path.resolve(strict=True)
     if {
-        "filename": path.relative_to(ROOT).as_posix(),
-        "sha256": _sha(path),
-        "bytes": path.stat().st_size,
+        "filename": resolved.relative_to(ROOT.resolve()).as_posix(),
+        "sha256": _sha(resolved),
+        "bytes": resolved.stat().st_size,
     } != plan["notes"]:
         raise ReleaseError("release notes differ from the pre-publication manifest")
 
