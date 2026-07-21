@@ -8,21 +8,21 @@ id = "ruff-format"
 name = "ruff format"
 language = "system"
 entry = "uv run --no-sync ruff format"
-files = "^(src|tests|packages/remerge-pos)/.*\\.pyi?$"
+files = "^(src|tests|tools|packages/remerge-pos)/.*\\.pyi?$"
 
 [[repos.hooks]]
 id = "ruff-check"
 name = "ruff check"
 language = "system"
 entry = "uv run --no-sync ruff check"
-files = "^(src|tests|packages/remerge-pos)/.*\\.pyi?$"
+files = "^(src|tests|tools|packages/remerge-pos)/.*\\.pyi?$"
 
 [[repos.hooks]]
 id = "ty-check"
 name = "ty check"
 language = "system"
-entry = "uv run --no-sync ty check src tests packages/remerge-pos/src packages/remerge-pos/tests"
-files = "^((src|tests|packages/remerge-pos)/.*\\.pyi?|pyproject\\.toml)$"
+entry = "uv run --no-sync ty check src tests tools packages/remerge-pos/src packages/remerge-pos/tests"
+files = "^((src|tests|tools|packages/remerge-pos)/.*\\.pyi?|pyproject\\.toml)$"
 pass_filenames = false
 
 [[repos.hooks]]
